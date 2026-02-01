@@ -1,0 +1,18 @@
+{
+    "title": "예시 미궁",
+    "image": "./image/title.jpg",
+    "description": "thelaby-cipher 예시 미궁입니다.",
+    "tags": ["puzzle", "short"],
+    "start_page": "start",
+    "allow_rating": true,
+    "rating_threshold": 1,
+    "show_difficulty": true,
+    "show_page_count": false,
+    "show_ending_count": false,
+    "show_badend_count": false,
+    "clear_visibility": "full",
+    "show_answer_rate": false,
+    "block_right_click": false,
+    "login_required": false,
+    "chat_alert": false
+}

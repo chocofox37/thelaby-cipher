@@ -1,0 +1,12 @@
+{
+    "title": "시작",
+    "background_color": "#000000",
+    "answers": [
+        {
+            "answer": "다음",
+            "next": "branch",
+            "public": false
+        }
+    ],
+    "is_ending": false
+}

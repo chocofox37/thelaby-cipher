@@ -1,0 +1,19 @@
+{
+    "name": "thelaby-cipher",
+    "version": "1.0.0",
+    "description": "Auto-uploader for The Labyrinth (더라비린스)",
+    "main": "upload.js",
+    "scripts": {
+        "upload": "node upload.js ./example"
+    },
+    "keywords": [
+        "labyrinth",
+        "upload",
+        "puppeteer"
+    ],
+    "author": "chocofox37",
+    "license": "MIT",
+    "dependencies": {
+        "puppeteer": "^24.4.0"
+    }
+}

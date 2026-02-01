@@ -1,0 +1,17 @@
+{
+    "title": "분기",
+    "background_color": "#1a1a2e",
+    "answers": [
+        {
+            "answer": "실패",
+            "next": "badend",
+            "public": false
+        },
+        {
+            "answer": "성공",
+            "next": "ending",
+            "public": false
+        }
+    ],
+    "is_ending": false
+}

@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Account credentials (sensitive)
+account.json
+
+# Meta files (auto-generated)
+*.meta
+
+# IDE/Editor
+.claude/
+.serena/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
