@@ -98,7 +98,7 @@ async function setEditorContent(page, html) {
     // Wait for editor to be ready
     const editorReady = await waitForEditor(page);
     if (!editorReady) {
-        console.error('[page] setEditorContent failed: editor not ready after timeout');
+        console.error('에디터가 준비되지 않았습니다 (타임아웃)');
         return false;
     }
 
@@ -125,11 +125,10 @@ async function setEditorContent(page, html) {
     }, html);
 
     if (!result.success) {
-        console.error('[page] setEditorContent failed');
+        console.error('에디터 콘텐츠 설정 실패');
         return false;
     }
 
-    console.log(`[page] Editor content set (${result.length} chars)`);
     return true;
 }
 
@@ -234,7 +233,7 @@ async function fillPageForm(page, data) {
     if (data.content) {
         const contentSet = await setEditorContent(page, data.content);
         if (!contentSet) {
-            console.error('[page] WARNING: Failed to set editor content!');
+            console.error('에디터 콘텐츠 설정에 실패했습니다');
         }
     }
 }

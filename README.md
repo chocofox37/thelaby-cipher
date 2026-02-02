@@ -11,14 +11,29 @@ npm install
 ## 사용법
 
 ```bash
-node upload.js <콘텐츠-폴더>
+node upload.js [옵션] <콘텐츠-폴더>
 ```
+
+### 옵션
+
+| 옵션 | 설명 |
+|------|------|
+| `--show-browser` | 브라우저 창을 표시합니다 (디버깅용) |
+| `--verbose` | 상세 로그를 출력합니다 |
+| `--quiet`, `-q` | 에러만 출력합니다 |
+| `--help`, `-h` | 도움말을 표시합니다 |
 
 ### 예시
 
 ```bash
 # example 폴더의 미궁 업로드
 node upload.js ./example
+
+# 브라우저 창을 보면서 업로드 (디버깅)
+node upload.js --show-browser ./example
+
+# 상세 로그 출력
+node upload.js --verbose ./example
 
 # npm script 사용
 npm run upload

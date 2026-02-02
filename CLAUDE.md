@@ -13,9 +13,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-node upload.js <content-folder>   # Upload labyrinth to site
-npm run upload                    # Upload example folder
+node upload.js [options] <content-folder>   # Upload labyrinth to site
+npm run upload                              # Upload example folder
 ```
+
+### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--show-browser` | Show browser window (for debugging) |
+| `--verbose` | Print detailed logs |
+| `--quiet`, `-q` | Print errors only |
+| `--help`, `-h` | Show help message |
 
 ## Architecture
 

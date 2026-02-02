@@ -17,7 +17,7 @@ const LOGIN_URL = 'https://www.thelabyrinth.co.kr/labyrinth/user/login.do';
  */
 async function login({ email, password, headless = true }) {
     if (!email || !password) {
-        throw new Error('Email and password are required');
+        throw new Error('이메일과 비밀번호가 필요합니다');
     }
 
     const browser = await puppeteer.launch({
@@ -50,12 +50,15 @@ async function login({ email, password, headless = true }) {
             const errorMsg = await page.evaluate(() => {
                 // Try to find error message on page
                 const alert = document.querySelector('.alert-message, .error-message');
-                return alert ? alert.textContent : 'Login failed - unknown reason';
+                return alert ? alert.textContent.trim() : '';
             });
-            throw new Error(`Login failed: ${errorMsg}`);
+            if (errorMsg) {
+                throw new Error(`로그인 실패: ${errorMsg}`);
+            } else {
+                throw new Error('로그인 실패: 이메일 또는 비밀번호를 확인해주세요');
+            }
         }
 
-        console.log('[login] Success! Redirected to:', currentUrl);
         return { browser, page };
 
     } catch (error) {
@@ -71,7 +74,6 @@ async function login({ email, password, headless = true }) {
 async function logout(browser) {
     if (browser) {
         await browser.close();
-        console.log('[login] Browser closed');
     }
 }
 

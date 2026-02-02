@@ -1,8 +1,13 @@
 /**
  * The Labyrinth Auto Upload Script
  *
- * Usage: node upload.js <content-folder>
+ * Usage: node upload.js [options] <content-folder>
  * Example: node upload.js ./example
+ *
+ * Options:
+ *   --show-browser    Show browser window (for debugging)
+ *   --verbose         Show detailed logs
+ *   --help            Show help message
  *
  * Reads config from <content-folder>/labyrinth.json
  * Reads credentials from <content-folder>/account.json
@@ -13,6 +18,168 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+// ============================================================
+// CLI Options
+// ============================================================
+
+/**
+ * Parse command line arguments
+ * @returns {{ contentFolder: string|null, showBrowser: boolean, verbose: boolean, quiet: boolean, help: boolean }}
+ */
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const options = {
+        contentFolder: null,
+        showBrowser: false,
+        verbose: false,
+        quiet: false,
+        help: false
+    };
+
+    for (const arg of args) {
+        if (arg === '--show-browser') {
+            options.showBrowser = true;
+        } else if (arg === '--verbose') {
+            options.verbose = true;
+        } else if (arg === '--quiet' || arg === '-q') {
+            options.quiet = true;
+        } else if (arg === '--help' || arg === '-h') {
+            options.help = true;
+        } else if (!arg.startsWith('-')) {
+            options.contentFolder = arg;
+        }
+    }
+
+    return options;
+}
+
+/**
+ * Show help message
+ */
+function showHelp() {
+    console.log(`
+사용법: node upload.js [옵션] <콘텐츠-폴더>
+
+옵션:
+  --show-browser    브라우저 창을 표시합니다 (디버깅용)
+  --verbose         상세 로그를 출력합니다
+  --quiet, -q       에러만 출력합니다
+  --help, -h        도움말을 표시합니다
+
+예시:
+  node upload.js ./example
+  node upload.js --show-browser ./my-labyrinth
+  node upload.js --verbose ./my-labyrinth
+`);
+}
+
+// Global options (set in main)
+let OPTIONS = { verbose: false, quiet: false };
+
+/**
+ * Logging utilities
+ */
+const log = {
+    // Always shown (unless quiet)
+    info: (msg) => {
+        if (!OPTIONS.quiet) console.log(msg);
+    },
+    // Always shown
+    error: (msg) => console.error(msg),
+
+    // Only shown in verbose mode
+    verbose: (msg) => {
+        if (OPTIONS.verbose && !OPTIONS.quiet) console.log(msg);
+    },
+
+    // Section headers (unless quiet)
+    section: (step, total, msg) => {
+        if (!OPTIONS.quiet) console.log(`[${step}/${total}] ${msg}`);
+    },
+
+    // Progress within a section (e.g., [3/10] 페이지)
+    progress: (current, total, msg) => {
+        if (!OPTIONS.quiet) console.log(`  [${current}/${total}] ${msg}`);
+    },
+
+    // Indented messages
+    item: (msg) => {
+        if (!OPTIONS.quiet) console.log(`  ${msg}`);
+    },
+    subitem: (msg) => {
+        if (!OPTIONS.quiet) console.log(`    ${msg}`);
+    },
+
+    // Success/failure
+    success: (msg) => {
+        if (!OPTIONS.quiet) console.log(`  완료: ${msg}`);
+    },
+    fail: (msg) => console.error(`  실패: ${msg}`)
+};
+
+// ============================================================
+// Retry Utility
+// ============================================================
+
+/**
+ * Retry configuration
+ */
+const RETRY_CONFIG = {
+    maxRetries: 3,
+    delayMs: 1000,
+    // Error patterns that indicate network/timeout issues worth retrying
+    retryableErrors: [
+        /timeout/i,
+        /ECONNRESET/i,
+        /ECONNREFUSED/i,
+        /ETIMEDOUT/i,
+        /net::/i,
+        /Navigation failed/i,
+        /Protocol error/i,
+        /Target closed/i
+    ]
+};
+
+/**
+ * Check if an error is retryable (network/timeout related)
+ * @param {Error} error
+ * @returns {boolean}
+ */
+function isRetryableError(error) {
+    const message = error.message || '';
+    return RETRY_CONFIG.retryableErrors.some(pattern => pattern.test(message));
+}
+
+/**
+ * Execute an async function with retry logic
+ * @param {Function} fn - Async function to execute
+ * @param {string} description - Description for logging
+ * @param {number} [maxRetries] - Override max retries
+ * @returns {Promise<any>}
+ */
+async function withRetry(fn, description, maxRetries = RETRY_CONFIG.maxRetries) {
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error;
+
+            if (!isRetryableError(error) || attempt === maxRetries) {
+                throw error;
+            }
+
+            const delay = RETRY_CONFIG.delayMs * attempt;
+            log.verbose(`  ${description} 실패 (${attempt}/${maxRetries}), ${delay}ms 후 재시도...`);
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+
+    throw lastError;
+}
+
 const { login, logout } = require('./src/login');
 const { createLabyrinth, updateLabyrinth, computeLabyrinthHash, validateConfig } = require('./src/labyrinth');
 const {
@@ -42,17 +209,26 @@ const {
 function loadAccount(contentPath) {
     const accountPath = path.join(contentPath, 'account.json');
     if (!fs.existsSync(accountPath)) {
-        console.error('Error: account.json not found in', contentPath);
-        console.error('Please create account.json with { "id": "email", "password": "password" }');
+        log.error(`account.json 파일을 찾을 수 없습니다: ${accountPath}`);
+        log.error('account.json 파일을 생성해주세요.');
+        log.error('형식: { "email": "이메일", "password": "비밀번호" }');
         process.exit(1);
     }
 
-    const account = JSON.parse(fs.readFileSync(accountPath, 'utf8'));
+    let account;
+    try {
+        account = JSON.parse(fs.readFileSync(accountPath, 'utf8'));
+    } catch (e) {
+        log.error(`account.json 파일을 읽을 수 없습니다: ${e.message}`);
+        log.error('JSON 형식이 올바른지 확인해주세요.');
+        process.exit(1);
+    }
 
     // Support both "email" and "id" fields
     const userId = account.email || account.id;
     if (!userId || !account.password) {
-        console.error('Error: account.json must have id/email and password fields');
+        log.error('account.json에 이메일과 비밀번호가 필요합니다.');
+        log.error('형식: { "email": "이메일", "password": "비밀번호" }');
         process.exit(1);
     }
 
@@ -257,22 +433,22 @@ function validatePageJson(pageName, pageData, allPageNames = []) {
 
     // Required: title
     if (!pageData.title || pageData.title.trim() === '') {
-        errors.push(`[${pageName}] title is required.`);
+        errors.push(`[${pageName}] title 필드가 필요합니다.`);
     } else if (pageData.title.length > PAGE_VALIDATION.title.maxLength) {
-        errors.push(`[${pageName}] title exceeds ${PAGE_VALIDATION.title.maxLength} characters.`);
+        errors.push(`[${pageName}] title이 ${PAGE_VALIDATION.title.maxLength}자를 초과합니다.`);
     }
 
     // background_color format
     if (pageData.background_color) {
         if (!PAGE_VALIDATION.background_color.pattern.test(pageData.background_color)) {
-            errors.push(`[${pageName}] Invalid background_color format: ${pageData.background_color} (expected: #000000)`);
+            errors.push(`[${pageName}] background_color 형식이 잘못되었습니다: ${pageData.background_color} (예: #000000)`);
         }
     }
 
     // header_display valid values
     if (pageData.header_display) {
         if (!PAGE_VALIDATION.header_display.allowedValues.includes(pageData.header_display)) {
-            warnings.push(`[${pageName}] Invalid header_display value: ${pageData.header_display} (allowed: ${PAGE_VALIDATION.header_display.allowedValues.join(', ')})`);
+            warnings.push(`[${pageName}] header_display 값이 잘못되었습니다: ${pageData.header_display} (허용: ${PAGE_VALIDATION.header_display.allowedValues.join(', ')})`);
         }
     }
 
@@ -283,13 +459,13 @@ function validatePageJson(pageName, pageData, allPageNames = []) {
 
             // answer text required
             if (!ans.answer || ans.answer.trim() === '') {
-                errors.push(`[${pageName}] answers[${i}].answer is required.`);
+                errors.push(`[${pageName}] answers[${i}].answer가 비어있습니다.`);
             }
 
             // next page reference validation
             if (ans.next) {
                 if (!allPageNames.includes(ans.next)) {
-                    errors.push(`[${pageName}] answers[${i}].next references non-existent page: "${ans.next}"`);
+                    errors.push(`[${pageName}] answers[${i}].next가 존재하지 않는 페이지를 참조합니다: "${ans.next}"`);
                 }
             }
         }
@@ -297,7 +473,7 @@ function validatePageJson(pageName, pageData, allPageNames = []) {
 
     // is_ending validation
     if (pageData.is_ending !== undefined && typeof pageData.is_ending !== 'boolean') {
-        warnings.push(`[${pageName}] is_ending should be boolean.`);
+        warnings.push(`[${pageName}] is_ending은 true/false여야 합니다.`);
     }
 
     return {
@@ -383,22 +559,25 @@ async function uploadNewImages(browser, page, imagePaths, imageCache) {
 
         // Check if already uploaded
         if (updatedCache[checksum]) {
-            console.log(`    [image] ${path.basename(imagePath)} (cached)`);
+            log.verbose(`    [이미지] ${path.basename(imagePath)} (캐시됨)`);
             pathMap[imagePath] = updatedCache[checksum];
             continue;
         }
 
-        console.log(`    [image] ${path.basename(imagePath)} uploading...`);
-        const url = await uploadImage(browser, page, imagePath);
+        log.verbose(`    [이미지] ${path.basename(imagePath)} 업로드 중...`);
+        const url = await withRetry(
+            () => uploadImage(browser, page, imagePath),
+            `이미지 업로드: ${path.basename(imagePath)}`
+        );
 
         if (url) {
             // Ensure full URL
             const fullUrl = url.startsWith('/') ? `https://www.thelabyrinth.co.kr${url}` : url;
             updatedCache[checksum] = fullUrl;
             pathMap[imagePath] = fullUrl;
-            console.log(`    [image] done: ${fullUrl}`);
+            log.verbose(`    [이미지] 완료`);
         } else {
-            console.error(`    [image] failed: ${path.basename(imagePath)}`);
+            log.error(`    [이미지] 실패: ${path.basename(imagePath)}`);
         }
 
         await new Promise(r => setTimeout(r, 100));
@@ -538,65 +717,88 @@ function determinePageStates(htmlNames, jsonNames, metaNames, pageIds, metas) {
 }
 
 async function main() {
-    // Get content folder from argument
-    const contentFolder = process.argv[2];
+    // Parse CLI arguments
+    const args = parseArgs();
+    OPTIONS = args;
 
-    if (!contentFolder) {
-        console.error('Usage: node upload.js <content-folder>');
-        console.error('Example: node upload.js ./example');
+    // Show help if requested
+    if (args.help) {
+        showHelp();
+        process.exit(0);
+    }
+
+    // Validate content folder argument
+    if (!args.contentFolder) {
+        log.error('콘텐츠 폴더가 지정되지 않았습니다.');
+        log.error('');
+        showHelp();
         process.exit(1);
     }
 
+    const contentFolder = args.contentFolder;
     const contentPath = path.resolve(contentFolder);
     const configPath = path.join(contentPath, 'labyrinth.json');
     const metaPath = path.join(contentPath, 'labyrinth.meta');
 
     // Check if content folder exists
     if (!fs.existsSync(contentPath)) {
-        console.error(`Error: Content folder not found: ${contentPath}`);
+        log.error(`콘텐츠 폴더를 찾을 수 없습니다: ${contentPath}`);
+        log.error('경로를 확인해주세요.');
         process.exit(1);
     }
 
     // Read config
     if (!fs.existsSync(configPath)) {
-        console.error(`Error: labyrinth.json not found: ${configPath}`);
+        log.error(`labyrinth.json 파일을 찾을 수 없습니다: ${configPath}`);
+        log.error('콘텐츠 폴더에 labyrinth.json 파일을 생성해주세요.');
         process.exit(1);
     }
 
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    let config;
+    try {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch (e) {
+        log.error(`labyrinth.json 파일을 읽을 수 없습니다: ${e.message}`);
+        log.error('JSON 형식이 올바른지 확인해주세요.');
+        process.exit(1);
+    }
 
     if (!config.title) {
-        console.error('Error: title required in labyrinth.json');
+        log.error('labyrinth.json에 title 필드가 없습니다.');
+        log.error('미궁 제목을 지정해주세요.');
         process.exit(1);
     }
 
     // Load account credentials
     const account = loadAccount(contentPath);
 
-    console.log('=== The Labyrinth Upload ===');
-    console.log('Content:', contentFolder);
-    console.log('Title:', config.title);
-    console.log('');
+    log.info('=== 더라비린스 업로드 ===');
+    log.info(`폴더: ${contentFolder}`);
+    log.info(`미궁: ${config.title}`);
+    log.info('');
 
     // Validate config
     const validation = validateConfig(config);
     if (!validation.valid) {
-        console.error('Config validation failed:');
-        validation.errors.forEach(err => console.error(`  - ${err}`));
+        log.error('설정 검증 실패:');
+        validation.errors.forEach(err => log.error(`  - ${err}`));
         process.exit(1);
     }
 
     let browser, page;
 
     try {
-        // Login
-        console.log('[1/3] Logging in...');
-        ({ browser, page } = await login({
-            email: account.email,
-            password: account.password,
-            headless: true
-        }));
-        console.log('Login successful!');
+        // Login with retry
+        log.section(1, 3, '로그인 중...');
+        ({ browser, page } = await withRetry(
+            () => login({
+                email: account.email,
+                password: account.password,
+                headless: !args.showBrowser
+            }),
+            '로그인'
+        ));
+        log.info('  로그인 성공');
 
         // Check if labyrinth.meta exists
         let labyMeta = {};
@@ -609,7 +811,7 @@ async function main() {
         if (isNewLabyrinth) {
             const existingMetas = findPageMetaFiles(contentPath);
             if (existingMetas.length > 0) {
-                console.log(`Cleaning up ${existingMetas.length} old page meta files...`);
+                log.verbose(`  이전 메타 파일 ${existingMetas.length}개 정리 중...`);
                 for (const name of existingMetas) {
                     deletePageMeta(contentPath, name);
                 }
@@ -622,29 +824,33 @@ async function main() {
         // Options for labyrinth functions
         const options = { browser, labyPath: contentPath };
 
-        // Create or update labyrinth
+        // Create or update labyrinth (with retry)
+        log.info('');
         if (!labyMeta.id) {
-            console.log('');
-            console.log('[2/3] Creating labyrinth...');
-            const labyrinthId = await createLabyrinth(page, config, options);
+            log.section(2, 3, '미궁 생성 중...');
+            const labyrinthId = await withRetry(
+                () => createLabyrinth(page, config, options),
+                '미궁 생성'
+            );
 
             labyMeta.id = labyrinthId;
             labyMeta.hash = currentHash;
             labyMeta.images = labyMeta.images || {};
             labyMeta.pageIds = labyMeta.pageIds || [];
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-            console.log('Labyrinth created! ID:', labyrinthId);
+            log.info(`  미궁 생성 완료 (ID: ${labyrinthId})`);
         } else if (labyMeta.hash !== currentHash) {
-            console.log('');
-            console.log('[2/3] Updating labyrinth info...');
-            await updateLabyrinth(page, labyMeta.id, config, options);
+            log.section(2, 3, '미궁 정보 수정 중...');
+            await withRetry(
+                () => updateLabyrinth(page, labyMeta.id, config, options),
+                '미궁 수정'
+            );
 
             labyMeta.hash = currentHash;
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-            console.log('Labyrinth info updated!');
+            log.info('  미궁 정보 수정 완료');
         } else {
-            console.log('');
-            console.log('[2/3] Labyrinth info unchanged');
+            log.section(2, 3, '미궁 정보 변경 없음');
         }
 
         const labyrinthId = labyMeta.id;
@@ -652,12 +858,12 @@ async function main() {
         let pageIds = labyMeta.pageIds || [];
 
         // Find all page files
-        console.log('');
-        console.log('[3/3] Processing pages...');
+        log.info('');
+        log.section(3, 3, '페이지 처리 중...');
         const htmlNames = findPageHtmlFiles(contentPath);
         const jsonNames = findPageJsonFiles(contentPath);
         const metaNames = findPageMetaFiles(contentPath);
-        console.log(`  HTML: ${htmlNames.length}, JSON: ${jsonNames.length}, Meta: ${metaNames.length}, Known IDs: ${pageIds.length}`);
+        log.verbose(`  HTML: ${htmlNames.length}, JSON: ${jsonNames.length}, Meta: ${metaNames.length}, 등록된 ID: ${pageIds.length}`);
 
         // Load all page data and meta
         const pages = {};
@@ -686,60 +892,60 @@ async function main() {
         // Determine page states
         const states = determinePageStates(htmlNames, jsonNames, metaNames, pageIds, metas);
 
-        // Show warnings for abnormal states
+        // Show warnings for abnormal states (verbose only)
         const warnings = [];
 
         if (states.json_missing.length > 0) {
             for (const item of states.json_missing) {
-                warnings.push(`[${item.name}] HTML exists but JSON missing - skipped`);
+                warnings.push(`[${item.name}] HTML은 있지만 JSON이 없음 - 건너뜀`);
             }
         }
 
         if (states.html_missing.length > 0) {
             for (const item of states.html_missing) {
-                warnings.push(`[${item.name}] JSON exists but HTML missing - skipped`);
+                warnings.push(`[${item.name}] JSON은 있지만 HTML이 없음 - 건너뜀`);
             }
         }
 
         if (states.pageIds_missing.length > 0) {
             for (const item of states.pageIds_missing) {
-                warnings.push(`[${item.name}] Missing from pageIds (ID: ${item.id}) - will delete and recreate`);
+                warnings.push(`[${item.name}] 목록에서 누락됨 (ID: ${item.id}) - 삭제 후 재생성`);
             }
         }
 
         if (states.residual_meta.length > 0) {
             for (const item of states.residual_meta) {
-                warnings.push(`[${item.name}] Residual meta (ID: ${item.id}) - will clean up`);
+                warnings.push(`[${item.name}] 잔여 메타 파일 (ID: ${item.id}) - 정리 예정`);
             }
         }
 
         if (states.orphan.length > 0) {
-            warnings.push(`Orphan page IDs: ${states.orphan.join(', ')} - will delete from site`);
+            warnings.push(`미사용 페이지 ID: ${states.orphan.join(', ')} - 사이트에서 삭제 예정`);
         }
 
         if (warnings.length > 0) {
-            console.log('');
-            console.log('  [Warnings]');
-            warnings.forEach(w => console.log(`    ${w}`));
+            log.verbose('');
+            log.verbose('  [주의]');
+            warnings.forEach(w => log.verbose(`    ${w}`));
         }
 
         // Validate all valid pages
         const pageValidation = validateAllPages(pages);
 
-        // Show validation warnings
+        // Show validation warnings (verbose only)
         if (pageValidation.warnings.length > 0) {
-            console.log('');
-            console.log('  [Validation Warnings]');
-            pageValidation.warnings.forEach(w => console.log(`    ${w}`));
+            log.verbose('');
+            log.verbose('  [검증 주의사항]');
+            pageValidation.warnings.forEach(w => log.verbose(`    ${w}`));
         }
 
         // Stop on errors
         if (!pageValidation.valid) {
-            console.error('');
-            console.error('  [Error] Page validation failed:');
-            pageValidation.errors.forEach(e => console.error(`    ${e}`));
-            console.error('');
-            console.error('  Please fix errors and try again.');
+            log.error('');
+            log.error('페이지 검증 실패:');
+            pageValidation.errors.forEach(e => log.error(`  - ${e}`));
+            log.error('');
+            log.error('오류를 수정한 후 다시 실행해주세요.');
             process.exit(1);
         }
 
@@ -748,8 +954,8 @@ async function main() {
 
         // Validate first_page reference
         if (firstPage && !Object.keys(pages).includes(firstPage)) {
-            console.error(`  [Error] first_page/start_page references non-existent page: "${firstPage}"`);
-            console.error('  Available pages:', Object.keys(pages).join(', '));
+            log.error(`시작 페이지를 찾을 수 없습니다: "${firstPage}"`);
+            log.error(`사용 가능한 페이지: ${Object.keys(pages).join(', ')}`);
             process.exit(1);
         }
 
@@ -806,26 +1012,26 @@ async function main() {
             metasToDelete.push(item.name);
         }
 
-        console.log(`  New: ${newPages.length}, Modified: ${updatedPages.length}, Unchanged: ${unchangedPages.length}`);
+        log.info(`  신규: ${newPages.length}, 수정: ${updatedPages.length}, 변경없음: ${unchangedPages.length}`);
         if (pagesToDelete.length > 0) {
-            console.log(`  To delete: ${pagesToDelete.length}`);
+            log.info(`  삭제 예정: ${pagesToDelete.length}`);
         }
 
         // ============================================================
         // Pre-phase: Delete pages that need recreation
         // ============================================================
         if (pagesToDeleteBeforeRecreate.length > 0) {
-            console.log('');
-            console.log(`[Pre] Deleting pages for recreation... (${pagesToDeleteBeforeRecreate.length})`);
+            log.verbose('');
+            log.verbose(`  재생성을 위해 기존 페이지 삭제 중... (${pagesToDeleteBeforeRecreate.length}개)`);
 
             for (const pageId of pagesToDeleteBeforeRecreate) {
-                console.log(`  - ID ${pageId} deleting...`);
+                log.verbose(`  - ID ${pageId} 삭제 중...`);
                 const success = await deletePage(page, labyrinthId, pageId);
                 if (success) {
                     pageIds = pageIds.filter(id => id !== pageId);
-                    console.log(`    deleted`);
+                    log.verbose(`    삭제됨`);
                 } else {
-                    console.log(`    failed (may not exist)`);
+                    log.verbose(`    실패 (이미 삭제됨)`);
                 }
                 await new Promise(r => setTimeout(r, 100));
             }
@@ -836,26 +1042,30 @@ async function main() {
 
         // Create new pages
         if (newPages.length > 0) {
-            console.log('');
-            console.log(`  Creating new pages... (${newPages.length})`);
+            log.info('');
+            log.info(`  신규 페이지 생성 중...`);
 
-            for (const name of newPages) {
+            for (let i = 0; i < newPages.length; i++) {
+                const name = newPages[i];
                 const pageData = pages[name].json;
-                console.log(`  - ${name}: ${pageData.title}`);
+                log.progress(i + 1, newPages.length, `${name}: ${pageData.title}`);
 
                 // Read HTML content
                 let html = pages[name].html;
                 if (!html) {
-                    console.log(`    [warning] No HTML content`);
+                    log.error(`    HTML 내용이 없습니다`);
                     continue;
                 }
 
-                await navigateToCreatePage(page, labyrinthId);
+                await withRetry(
+                    () => navigateToCreatePage(page, labyrinthId),
+                    '페이지 생성 화면 이동'
+                );
 
                 // Find and upload images
                 const localImages = findLocalImages(html, contentPath);
                 if (localImages.length > 0) {
-                    console.log(`    Processing ${localImages.length} images...`);
+                    log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
                     imageCache = newCache;
 
@@ -884,14 +1094,17 @@ async function main() {
                 if (answers.length > 0) {
                     for (const ans of answers) {
                         await addAnswer(page, ans.answer, ans.public || false, ans.explanation || '');
-                        console.log(`    answer: "${ans.answer}"`);
+                        log.verbose(`    정답: "${ans.answer}"`);
                     }
                 } else if (hasAnswers) {
                     // Site requires at least one answer for non-ending pages
                     await addAnswer(page, 'temp', false, '');
                 }
 
-                const pageId = await submitPageForm(page, labyrinthId, pageData.title);
+                const pageId = await withRetry(
+                    () => submitPageForm(page, labyrinthId, pageData.title),
+                    '페이지 저장'
+                );
 
                 if (pageId) {
                     pages[name].meta.id = pageId;
@@ -904,9 +1117,9 @@ async function main() {
                         pageIds.push(pageId);
                     }
 
-                    console.log(`    created: ID ${pageId}`);
+                    log.info(`    생성됨 (ID: ${pageId})`);
                 } else {
-                    console.error(`    failed: could not get page ID`);
+                    log.error(`    생성 실패: 페이지 ID를 받아올 수 없습니다`);
                 }
             }
 
@@ -924,32 +1137,36 @@ async function main() {
 
         // Update modified pages
         if (updatedPages.length > 0) {
-            console.log('');
-            console.log(`  Updating modified pages... (${updatedPages.length})`);
+            log.info('');
+            log.info(`  수정된 페이지 업데이트 중...`);
 
-            for (const name of updatedPages) {
+            for (let i = 0; i < updatedPages.length; i++) {
+                const name = updatedPages[i];
                 const pageData = pages[name].json;
                 const pageMeta = pages[name].meta;
                 const pageId = pageMeta.id;
 
                 if (!pageId) continue;
 
-                console.log(`  - ${name}: ${pageData.title}`);
+                log.progress(i + 1, updatedPages.length, `${name}: ${pageData.title}`);
 
                 // Read HTML content
                 let html = pages[name].html;
                 if (!html) {
-                    console.log(`    [warning] No HTML content`);
+                    log.error(`    HTML 내용이 없습니다`);
                     continue;
                 }
 
                 // Navigate to editor first (for image upload)
-                await navigateToEditPage(page, labyrinthId, pageId);
+                await withRetry(
+                    () => navigateToEditPage(page, labyrinthId, pageId),
+                    '페이지 편집 화면 이동'
+                );
 
                 // Find and upload images
                 const localImages = findLocalImages(html, contentPath);
                 if (localImages.length > 0) {
-                    console.log(`    Processing ${localImages.length} images...`);
+                    log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
                     imageCache = newCache;
 
@@ -960,7 +1177,10 @@ async function main() {
                 }
 
                 // Navigate again (upload might have changed page state)
-                await navigateToEditPage(page, labyrinthId, pageId);
+                await withRetry(
+                    () => navigateToEditPage(page, labyrinthId, pageId),
+                    '페이지 편집 화면 이동'
+                );
 
                 // Fill form with full data
                 const isFirst = (firstPage === name);
@@ -984,11 +1204,14 @@ async function main() {
 
                     for (const ans of answers) {
                         await addAnswer(page, ans.answer, ans.public || false, ans.explanation || '');
-                        console.log(`    answer: "${ans.answer}"`);
+                        log.verbose(`    정답: "${ans.answer}"`);
                     }
                 }
 
-                await submitPageForm(page);
+                await withRetry(
+                    () => submitPageForm(page),
+                    '페이지 저장'
+                );
 
                 // Update page meta
                 pageMeta.hash = pages[name].hash;
@@ -996,7 +1219,7 @@ async function main() {
                 pageMeta.is_ending = isEnding;
                 writePageMeta(contentPath, name, pageMeta);
 
-                console.log(`    updated`);
+                log.info(`    수정됨`);
             }
         }
 
@@ -1028,45 +1251,51 @@ async function main() {
 
         const targetPages = Object.keys(connections);
         if (targetPages.length > 0) {
-            console.log('');
-            console.log(`  Setting page connections... (${targetPages.length} targets)`);
+            log.verbose('');
+            log.verbose(`  페이지 연결 설정 중... (${targetPages.length}개)`);
 
             for (const targetPageId of targetPages) {
                 const sources = connections[targetPageId];
                 const targetName = Object.entries(pageIdMap).find(([n, id]) => id === targetPageId)?.[0] || targetPageId;
 
-                console.log(`  - ${targetName} (ID: ${targetPageId})`);
+                log.verbose(`  - ${targetName} (ID: ${targetPageId})`);
 
-                await navigateToEditPage(page, labyrinthId, targetPageId);
+                await withRetry(
+                    () => navigateToEditPage(page, labyrinthId, targetPageId),
+                    '페이지 편집 화면 이동'
+                );
                 await clearParentConnections(page);
 
                 for (const src of sources) {
                     const success = await setParentConnection(page, src.fromPageId, src.answerIndex);
                     if (success) {
-                        console.log(`    <- ${src.fromName} [answer: ${src.answer}]`);
+                        log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
                     } else {
-                        console.log(`    <- ${src.fromName} [failed]`);
+                        log.verbose(`    <- ${src.fromName} [실패]`);
                     }
                 }
 
-                await submitPageForm(page);
+                await withRetry(
+                    () => submitPageForm(page),
+                    '페이지 저장'
+                );
                 await new Promise(r => setTimeout(r, 100));
             }
         }
 
-        // Delete orphan pages
+        // Delete unused pages
         if (pagesToDelete.length > 0) {
-            console.log('');
-            console.log(`  Deleting orphan pages... (${pagesToDelete.length})`);
+            log.verbose('');
+            log.verbose(`  미사용 페이지 삭제 중... (${pagesToDelete.length}개)`);
 
             for (const pageId of pagesToDelete) {
-                console.log(`  - ID ${pageId} deleting...`);
+                log.verbose(`  - ID ${pageId} 삭제 중...`);
                 const success = await deletePage(page, labyrinthId, pageId);
                 if (success) {
                     pageIds = pageIds.filter(id => id !== pageId);
-                    console.log(`    deleted`);
+                    log.verbose(`    삭제됨`);
                 } else {
-                    console.log(`    failed (may not exist)`);
+                    log.verbose(`    실패 (이미 삭제됨)`);
                     pageIds = pageIds.filter(id => id !== pageId);
                 }
                 await new Promise(r => setTimeout(r, 100));
@@ -1076,32 +1305,35 @@ async function main() {
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
         }
 
-        // Clean up orphan meta files
+        // Clean up unused meta files
         if (metasToDelete.length > 0) {
-            console.log('');
-            console.log(`Cleaning up meta files... (${metasToDelete.length})`);
+            log.verbose('');
+            log.verbose(`  메타 파일 정리 중... (${metasToDelete.length}개)`);
             for (const name of metasToDelete) {
                 deletePageMeta(contentPath, name);
-                console.log(`  - ${name}.meta deleted`);
+                log.verbose(`  - ${name}.meta 삭제됨`);
             }
         }
 
-        console.log('');
-        console.log('Cleanup complete');
-
         // Final summary
-        console.log('');
-        console.log('=== Upload Complete ===');
-        console.log(`Labyrinth ID: ${labyrinthId}`);
-        console.log(`Pages: ${Object.keys(pages).length} (known IDs: ${pageIds.length})`);
-        console.log(`Image cache: ${Object.keys(imageCache).length}`);
+        log.info('');
+        log.info('=== 업로드 완료 ===');
+        log.info(`미궁 ID: ${labyrinthId}`);
+        log.info(`페이지: ${Object.keys(pages).length}개`);
+        log.verbose(`  등록된 ID: ${pageIds.length}개`);
+        log.verbose(`  이미지 캐시: ${Object.keys(imageCache).length}개`);
         if (pagesToDelete.length > 0) {
-            console.log(`Deleted: ${pagesToDelete.length}`);
+            log.info(`삭제됨: ${pagesToDelete.length}개`);
         }
 
     } catch (error) {
-        console.error('Error:', error.message);
-        console.error(error.stack);
+        log.error('');
+        log.error(`오류가 발생했습니다: ${error.message}`);
+        if (OPTIONS.verbose) {
+            log.error(error.stack);
+        } else {
+            log.error('상세 정보를 보려면 --verbose 옵션을 사용하세요.');
+        }
         process.exit(1);
     } finally {
         if (browser) {

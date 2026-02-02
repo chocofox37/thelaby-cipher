@@ -157,19 +157,19 @@ function validateConfig(config) {
 
     // Required: title
     if (!normalized.title || normalized.title.trim() === '') {
-        errors.push('title is required.');
+        errors.push('title 필드가 필요합니다.');
     } else if (normalized.title.length > VALIDATION.title.maxLength) {
-        errors.push(`title exceeds ${VALIDATION.title.maxLength} characters.`);
+        errors.push(`title이 ${VALIDATION.title.maxLength}자를 초과합니다.`);
     }
 
     // Description length
     if (normalized.description && normalized.description.length > VALIDATION.description.maxLength) {
-        errors.push(`description exceeds ${VALIDATION.description.maxLength} characters. (current: ${normalized.description.length})`);
+        errors.push(`description이 ${VALIDATION.description.maxLength}자를 초과합니다. (현재: ${normalized.description.length}자)`);
     }
 
     // Tags count
     if (normalized.tags && normalized.tags.length > VALIDATION.tags.maxLength) {
-        errors.push(`Maximum ${VALIDATION.tags.maxLength} tags allowed.`);
+        errors.push(`태그는 최대 ${VALIDATION.tags.maxLength}개까지 가능합니다.`);
     }
 
     // Validate tag names
@@ -178,7 +178,7 @@ function validateConfig(config) {
             typeof tag === 'string' && !TAG_MAP[tag]
         );
         if (invalidTags.length > 0) {
-            errors.push(`Unknown tags: ${invalidTags.join(', ')}`);
+            errors.push(`알 수 없는 태그: ${invalidTags.join(', ')}`);
         }
     }
 
@@ -187,14 +187,14 @@ function validateConfig(config) {
         const ext = normalized.image.split('.').pop()?.toLowerCase();
         const allowedExts = ['bmp', 'jpg', 'jpeg', 'gif', 'png'];
         if (!allowedExts.includes(ext)) {
-            errors.push(`Invalid image format. (allowed: ${allowedExts.join(', ')})`);
+            errors.push(`이미지 형식이 잘못되었습니다. (허용: ${allowedExts.join(', ')})`);
         }
     }
 
     // clear_visibility validation
     const validVisibility = ['hidden', 'count', 'list', 'full'];
     if (normalized.clear_visibility && !validVisibility.includes(normalized.clear_visibility)) {
-        errors.push(`Invalid clear_visibility value. (allowed: ${validVisibility.join(', ')})`);
+        errors.push(`clear_visibility 값이 잘못되었습니다. (허용: ${validVisibility.join(', ')})`);
     }
 
     return {
@@ -278,23 +278,21 @@ async function applyTags(page, tags) {
  */
 async function uploadTitleImage(page, browser, imagePath) {
     if (!fs.existsSync(imagePath)) {
-        throw new Error(`Title image not found: ${imagePath}`);
+        throw new Error(`타이틀 이미지를 찾을 수 없습니다: ${imagePath}`);
     }
 
     // Validate file extension
     const ext = path.extname(imagePath).toLowerCase();
     const allowedExts = ['.bmp', '.jpg', '.jpeg', '.gif', '.png'];
     if (!allowedExts.includes(ext)) {
-        throw new Error(`Invalid image format: ${ext}. Allowed: ${allowedExts.join(', ')}`);
+        throw new Error(`지원하지 않는 이미지 형식입니다: ${ext} (지원 형식: ${allowedExts.join(', ')})`);
     }
 
     // Check file size (max 5MB)
     const stats = fs.statSync(imagePath);
     if (stats.size > 5 * 1024 * 1024) {
-        throw new Error(`Image file too large: ${(stats.size / 1024 / 1024).toFixed(2)}MB. Max: 5MB`);
+        throw new Error(`이미지 파일이 너무 큽니다: ${(stats.size / 1024 / 1024).toFixed(2)}MB (최대 5MB)`);
     }
-
-    console.log(`[labyrinth] Uploading title image: ${path.basename(imagePath)}`);
 
     // Wait for popup to open when we click the button
     const popupPromise = new Promise((resolve) => {
@@ -478,7 +476,7 @@ async function applyConfigToForm(page, config, options = {}) {
  */
 async function createLabyrinth(page, config, options = {}) {
     if (!config.title) {
-        throw new Error('Labyrinth title is required');
+        throw new Error('미궁 제목이 필요합니다');
     }
 
     console.log('[labyrinth] Navigating to registration page...');
@@ -532,7 +530,7 @@ async function createLabyrinth(page, config, options = {}) {
     }
 
     if (!labyrinthSeqn) {
-        throw new Error('Failed to get labyrinth ID after creation');
+        throw new Error('미궁 생성 후 ID를 가져올 수 없습니다. 사이트를 확인해주세요.');
     }
 
     console.log('[labyrinth] Created labyrinth ID:', labyrinthSeqn);

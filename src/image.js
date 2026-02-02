@@ -72,14 +72,14 @@ async function uploadImage(browser, page, imagePath) {
     // Validate image first
     const validation = validateImage(imagePath);
     if (!validation.valid) {
-        console.error(`[image] Validation failed: ${validation.error}`);
+        console.error(`이미지 검증 실패: ${validation.error}`);
         return null;
     }
 
     // Get fileActionURL from main page (read-only)
     const fileActionURL = await page.evaluate(() => window.fileActionURL);
     if (!fileActionURL) {
-        console.error('[image] fileActionURL not found on page');
+        console.error('페이지에서 업로드 URL을 찾을 수 없습니다');
         return null;
     }
 
@@ -87,14 +87,14 @@ async function uploadImage(browser, page, imagePath) {
     const frames = page.frames();
     const editorFrame = frames.find(f => f.url().includes('smarteditor'));
     if (!editorFrame) {
-        console.error('[image] SmartEditor2 frame not found');
+        console.error('에디터를 찾을 수 없습니다');
         return null;
     }
 
     // Click photo button to open popup using high-level API
     const photoBtn = await editorFrame.$('button.se2_photo');
     if (!photoBtn) {
-        console.error('[image] Photo button not found in editor');
+        console.error('이미지 버튼을 찾을 수 없습니다');
         return null;
     }
     await photoBtn.click();
@@ -113,7 +113,7 @@ async function uploadImage(browser, page, imagePath) {
     }
 
     if (!popupPage) {
-        console.error('[image] Photo uploader popup not found');
+        console.error('이미지 업로드 팝업을 찾을 수 없습니다');
         return null;
     }
 
@@ -123,7 +123,7 @@ async function uploadImage(browser, page, imagePath) {
         // Set file on input using Puppeteer's uploadFile (this triggers events automatically)
         const fileInput = await popupPage.$('#uploadInputBox');
         if (!fileInput) {
-            console.error('[image] File input not found in popup');
+            console.error('파일 입력창을 찾을 수 없습니다');
             await popupPage.close();
             return null;
         }
