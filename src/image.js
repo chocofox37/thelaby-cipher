@@ -8,6 +8,22 @@ const path = require('path');
 const crypto = require('crypto');
 
 const BASE_URL = 'https://www.thelabyrinth.co.kr';
+const os = require('os');
+
+/**
+ * Generate random alphanumeric string
+ * @param {number} length - Length of the string (default: 8)
+ * @returns {string} Random alphanumeric string
+ */
+function generateRandomId(length = 8) {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const bytes = crypto.randomBytes(length);
+    let result = '';
+    for (let i = 0; i < length; i++) {
+        result += chars[bytes[i] % chars.length];
+    }
+    return result;
+}
 
 /**
  * Image validation constraints
@@ -76,10 +92,21 @@ async function uploadImage(browser, page, imagePath) {
         return null;
     }
 
+    // Create temp file with random suffix to bypass site cache
+    const ext = path.extname(imagePath);
+    const basename = path.basename(imagePath, ext);
+    const randomId = generateRandomId(8);
+    const tempFilename = `${basename}_${randomId}${ext}`;
+    const tempPath = path.join(os.tmpdir(), tempFilename);
+
+    // Copy original file to temp location
+    fs.copyFileSync(imagePath, tempPath);
+
     // Get fileActionURL from main page (read-only)
     const fileActionURL = await page.evaluate(() => window.fileActionURL);
     if (!fileActionURL) {
         console.error('페이지에서 업로드 URL을 찾을 수 없습니다');
+        fs.unlinkSync(tempPath);
         return null;
     }
 
@@ -88,6 +115,7 @@ async function uploadImage(browser, page, imagePath) {
     const editorFrame = frames.find(f => f.url().includes('smarteditor'));
     if (!editorFrame) {
         console.error('에디터를 찾을 수 없습니다');
+        fs.unlinkSync(tempPath);
         return null;
     }
 
@@ -95,6 +123,7 @@ async function uploadImage(browser, page, imagePath) {
     const photoBtn = await editorFrame.$('button.se2_photo');
     if (!photoBtn) {
         console.error('이미지 버튼을 찾을 수 없습니다');
+        fs.unlinkSync(tempPath);
         return null;
     }
     await photoBtn.click();
@@ -114,6 +143,7 @@ async function uploadImage(browser, page, imagePath) {
 
     if (!popupPage) {
         console.error('이미지 업로드 팝업을 찾을 수 없습니다');
+        fs.unlinkSync(tempPath);
         return null;
     }
 
@@ -125,10 +155,11 @@ async function uploadImage(browser, page, imagePath) {
         if (!fileInput) {
             console.error('파일 입력창을 찾을 수 없습니다');
             await popupPage.close();
+            fs.unlinkSync(tempPath);
             return null;
         }
 
-        await fileInput.uploadFile(imagePath);
+        await fileInput.uploadFile(tempPath);
         await new Promise(r => setTimeout(r, 100));
 
         // Click confirm button to upload
@@ -179,6 +210,8 @@ async function uploadImage(browser, page, imagePath) {
     } finally {
         // Always close popup
         try { await popupPage.close(); } catch (e) {}
+        // Always clean up temp file
+        try { fs.unlinkSync(tempPath); } catch (e) {}
     }
 
     return imageUrl;
@@ -272,6 +305,7 @@ function replaceImagePaths(html, pathToUrlMap) {
 }
 
 module.exports = {
+    generateRandomId,
     calculateChecksum,
     validateImage,
     uploadImage,

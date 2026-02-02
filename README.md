@@ -204,11 +204,11 @@ my-labyrinth/
 
 | HTML | JSON | META | 상태 | 처리 |
 |------|------|------|------|------|
-| ✓ | ✓ | ✓ | normal | 해시 변경 시 업데이트 |
-| ✓ | ✓ | ✗ | new | 신규 생성 |
-| ✓ | ✗ | - | json_missing | 경고 + 스킵 |
-| ✗ | ✓ | - | html_missing | 경고 + 스킵 |
-| ✗ | ✗ | ✓ | orphan | 삭제 |
+| O | O | O | normal | 해시 변경 시 업데이트 |
+| O | O | X | new | 신규 생성 |
+| O | X | - | json_missing | 경고 + 스킵 |
+| X | O | - | html_missing | 경고 + 스킵 |
+| X | X | O | orphan | 삭제 |
 
 ## 이미지 업로드
 

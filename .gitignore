@@ -1,12 +1,12 @@
 # Dependencies
 node_modules/
 
-# Account credentials (sensitive)
+# Credentials
 account.json
 
-# Meta files (auto-generated)
+# Meta files
 *.meta
 
-# Dev tools
+# AI tools
 .claude/
 .serena/

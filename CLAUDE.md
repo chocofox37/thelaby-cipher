@@ -136,18 +136,18 @@ Direct HTML content that goes into the SmartEditor2.
 
 1. Create new pages (with content, answers, images)
 2. Update modified pages (content, answers, images)
-3. Set parent connections (answer → next page links)
+3. Set parent connections (answer -> next page links)
 
 ### Page State Detection
 
 | HTML | JSON | Meta | pageIds | State | Action |
 |------|------|------|---------|-------|--------|
-| ✓ | ✓ | ✓ | ✓ | normal | Update if hash changed |
-| ✓ | ✓ | ✗ | ✗ | new | Create |
-| ✓ | ✗ | - | - | json_missing | Warn, skip |
-| ✗ | ✓ | - | - | html_missing | Warn, skip |
-| - | - | ✓ | ✓ | orphan | Delete from site |
-| ✓ | ✓ | ✓ | ✗ | pageIds_missing | Delete & recreate |
+| O | O | O | O | normal | Update if hash changed |
+| O | O | X | X | new | Create |
+| O | X | - | - | json_missing | Warn, skip |
+| X | O | - | - | html_missing | Warn, skip |
+| - | - | O | O | orphan | Delete from site |
+| O | O | O | X | pageIds_missing | Delete & recreate |
 
 **Key principle:** Both HTML and JSON must exist for a page to be uploaded.
 

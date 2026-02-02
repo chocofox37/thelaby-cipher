@@ -13,6 +13,5 @@
     "clear_visibility": "full",
     "show_answer_rate": false,
     "block_right_click": false,
-    "login_required": false,
-    "chat_alert": false
+    "login_required": false
 }

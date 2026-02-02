@@ -131,6 +131,8 @@ const RETRY_CONFIG = {
     // Error patterns that indicate network/timeout issues worth retrying
     retryableErrors: [
         /timeout/i,
+        /exceeded/i,
+        /Waiting failed/i,
         /ECONNRESET/i,
         /ECONNREFUSED/i,
         /ETIMEDOUT/i,
@@ -401,13 +403,14 @@ function deletePageMeta(contentPath, pageName) {
 }
 
 /**
- * Compute hash for page content (HTML + JSON for change detection)
+ * Compute hash for page content (HTML + JSON + image checksums for change detection)
  * @param {string} html - HTML content
  * @param {object} jsonData - JSON metadata
+ * @param {string[]} imageChecksums - Array of image file checksums
  * @returns {string} MD5 hash
  */
-function computePageHash(html, jsonData) {
-    const combined = JSON.stringify({ html, json: jsonData });
+function computePageHash(html, jsonData, imageChecksums = []) {
+    const combined = JSON.stringify({ html, json: jsonData, images: imageChecksums.sort() });
     return crypto.createHash('md5').update(combined).digest('hex');
 }
 
@@ -622,12 +625,12 @@ function escapeRegex(str) {
  * Determine page states based on html/json/meta/pageIds presence
  *
  * States:
- * - normal: html ✓, json ✓, meta ✓, pageIds ✓ → update if changed
- * - new: html ✓, json ✓, meta ✗ → create
- * - json_missing: html ✓, json ✗ → warn, skip (or delete if has meta)
- * - html_missing: html ✗, json ✓ → warn, skip (or delete if has meta)
- * - orphan: pageIds has ID not in metas → delete from site
- * - pageIds_missing: json ✓, meta ✓, pageIds ✗ → delete and recreate
+ * - normal: html O, json O, meta O, pageIds O -> update if changed
+ * - new: html O, json O, meta X -> create
+ * - json_missing: html O, json X -> warn, skip (or delete if has meta)
+ * - html_missing: html X, json O -> warn, skip (or delete if has meta)
+ * - orphan: pageIds has ID not in metas -> delete from site
+ * - pageIds_missing: json O, meta O, pageIds X -> delete and recreate
  *
  * @param {string[]} htmlNames - Page names from HTML files
  * @param {string[]} jsonNames - Page names from JSON files
@@ -638,10 +641,10 @@ function escapeRegex(str) {
  */
 function determinePageStates(htmlNames, jsonNames, metaNames, pageIds, metas) {
     const states = {
-        normal: [],         // html ✓, json ✓, meta ✓, pageIds ✓
-        new: [],            // html ✓, json ✓, meta ✗
-        json_missing: [],   // html ✓, json ✗
-        html_missing: [],   // html ✗, json ✓
+        normal: [],         // html O, json O, meta O, pageIds O
+        new: [],            // html O, json O, meta X
+        json_missing: [],   // html O, json X
+        html_missing: [],   // html X, json O
         orphan: [],         // pageIds has ID not mapped
         pageIds_missing: [], // meta has ID not in pageIds
         residual_meta: []   // meta exists but html/json missing
@@ -876,7 +879,11 @@ async function main() {
                 const json = readPageJson(contentPath, name);
                 const meta = readPageMeta(contentPath, name);
                 if (html && json) {
-                    pages[name] = { html, json, meta, hash: computePageHash(html, json) };
+                    // Calculate image checksums for change detection
+                    const pagePath = path.join(contentPath, 'page');
+                    const localImages = findLocalImages(html, pagePath);
+                    const imageChecksums = localImages.map(imgPath => calculateChecksum(imgPath));
+                    pages[name] = { html, json, meta, hash: computePageHash(html, json, imageChecksums) };
                 }
                 metas[name] = meta;
             }
@@ -1063,7 +1070,8 @@ async function main() {
                 );
 
                 // Find and upload images
-                const localImages = findLocalImages(html, contentPath);
+                const pagePath = path.join(contentPath, 'page');
+                const localImages = findLocalImages(html, pagePath);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
@@ -1164,7 +1172,8 @@ async function main() {
                 );
 
                 // Find and upload images
-                const localImages = findLocalImages(html, contentPath);
+                const pagePath = path.join(contentPath, 'page');
+                const localImages = findLocalImages(html, pagePath);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);

@@ -6,6 +6,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { generateRandomId } = require('./image');
 
 const REGISTER_URL = 'https://www.thelabyrinth.co.kr/labyrinth/laby/making/registLabyrinth.do';
 const IMAGE_POPUP_URL = 'https://www.thelabyrinth.co.kr/labyrinth/com/comImageFilePopup.do';
@@ -32,7 +34,6 @@ const LABYRINTH_DEFAULTS = {
     show_answer_rate: false,     // Show answer rate per question
     block_right_click: false,    // Block right-click/view source
     login_required: false,       // Members only
-    chat_alert: false,           // Chat room notification
 
     // Page settings
     start_page: ''               // Start page
@@ -131,7 +132,6 @@ const FIELD_MAP = {
     login_required: { selector: 'input[name="onlyLoginFlg"]', type: 'checkbox' },
     block_right_click: { selector: 'input[name="pageBlockFlg"]', type: 'checkbox' },
     allow_rating: { selector: 'input[name="evalYsno"]', type: 'checkbox' },
-    chat_alert: { selector: '#chatNoticeYnCheck', type: 'checkbox' },
     is_event: { selector: 'input[name="eventYsno"]', type: 'checkbox' },
 
     // Special types (handled separately)
@@ -294,6 +294,15 @@ async function uploadTitleImage(page, browser, imagePath) {
         throw new Error(`이미지 파일이 너무 큽니다: ${(stats.size / 1024 / 1024).toFixed(2)}MB (최대 5MB)`);
     }
 
+    // Create temp file with random suffix to bypass site cache
+    const basename = path.basename(imagePath, ext);
+    const randomId = generateRandomId(8);
+    const tempFilename = `${basename}_${randomId}${ext}`;
+    const tempPath = path.join(os.tmpdir(), tempFilename);
+
+    // Copy original file to temp location
+    fs.copyFileSync(imagePath, tempPath);
+
     // Wait for popup to open when we click the button
     const popupPromise = new Promise((resolve) => {
         browser.once('targetcreated', async (target) => {
@@ -312,6 +321,9 @@ async function uploadTitleImage(page, browser, imagePath) {
     await popupPage.waitForSelector('#atchFileUpload', { timeout: 10000 });
 
     try {
+        // Clear fileId on parent page first to detect new upload
+        await page.$eval('#fileId', el => el.value = '');
+
         // Check if there's an existing file and delete it first (read-only check)
         const deleteLink = await popupPage.$('a[onclick*="fn_deleteFile"]');
 
@@ -339,9 +351,9 @@ async function uploadTitleImage(page, browser, imagePath) {
             }
         }
 
-        // Set file on the input element
+        // Set file on the input element (use temp file with random suffix)
         const fileInput = await popupPage.$('#atchFileUpload');
-        await fileInput.uploadFile(imagePath);
+        await fileInput.uploadFile(tempPath);
 
         // Small delay to ensure file is processed
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -349,7 +361,7 @@ async function uploadTitleImage(page, browser, imagePath) {
         // Click upload button - the popup will call setFileInfo on parent and close
         await popupPage.click('input[value="파일등록"]');
 
-        // Wait for fileId to be set
+        // Wait for fileId to be set (we cleared it above)
         await page.waitForFunction(() => {
             const el = document.querySelector('#fileId');
             return el && el.value && el.value.trim() !== '';
@@ -367,6 +379,8 @@ async function uploadTitleImage(page, browser, imagePath) {
         } catch (e) {
             // Popup might already be closed
         }
+        // Always clean up temp file
+        try { fs.unlinkSync(tempPath); } catch (e) {}
     }
 }
 
