@@ -243,16 +243,17 @@ async function fillPageForm(page, data) {
  * @param {object} page - Puppeteer page
  */
 async function clearAnswers(page) {
-    // Find all delete buttons and click them (in reverse order to avoid index shifts)
+    // Find all delete buttons and click them
     let deleted = 0;
     while (true) {
-        const deleteBtn = await page.$('input.answerDel:not([style*="display: none"])');
+        // Use the correct selector: <a class="title-right-link" onclick="deleteAnswer(event, this);">
+        const deleteBtn = await page.$('a[onclick*="deleteAnswer"]');
         if (!deleteBtn) break;
 
         // Check if button is visible
         const isVisible = await deleteBtn.evaluate(el => {
-            const tr = el.closest('tr');
-            return tr && tr.style.display !== 'none';
+            const parent = el.closest('tr') || el.closest('div');
+            return parent && parent.style.display !== 'none' && el.offsetParent !== null;
         });
 
         if (!isVisible) break;
@@ -293,7 +294,7 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
 
     // Only click add button if we need a new row
     if (needNewRow) {
-        const addBtnSelector = '#addAnswerTr input[type="button"]';
+        const addBtnSelector = 'input[value="정답추가"], input[onclick*="addAnswer(this)"]';
         const addBtn = await page.$(addBtnSelector);
         if (addBtn) {
             const isDisabled = await addBtn.evaluate(el => el.disabled);
@@ -727,29 +728,13 @@ async function getParentConnections(page) {
 async function deletePage(page, labyrinthId, pageId) {
     console.log('[page] Deleting page:', pageId);
 
-    // Navigate to page list
-    const listUrl = `${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`;
-    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    // Navigate to the page edit screen
+    await navigateToEditPage(page, labyrinthId, pageId);
 
-    // Find the row containing the target page
-    const rows = await page.$$('table tbody tr, .quest_list tr');
-    let deleteBtn = null;
-
-    for (const row of rows) {
-        // Check if this row has a link with the target pageId
-        const link = await row.$('a[onclick*="questSeqn"]');
-        if (link) {
-            const onclick = await link.evaluate(el => el.getAttribute('onclick'));
-            if (onclick && onclick.includes(`questSeqn=${pageId}`)) {
-                // Found the row, now find the delete button
-                deleteBtn = await row.$('a[onclick*="delete"], input[onclick*="delete"]');
-                break;
-            }
-        }
-    }
-
-    if (deleteBtn) {
-        await deleteBtn.click();
+    // Find and click the delete button (#remove or value="삭제")
+    const removeBtn = await page.$('#remove, input[value="삭제"]');
+    if (removeBtn) {
+        await removeBtn.click();
         // Handle confirmation dialog
         await new Promise(r => setTimeout(r, 100));
 
@@ -764,7 +749,7 @@ async function deletePage(page, labyrinthId, pageId) {
         return true;
     }
 
-    console.log('[page] Delete button not found for page:', pageId);
+    console.log('[page] Delete button (#remove) not found on edit page');
     return false;
 }
 

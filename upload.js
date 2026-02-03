@@ -534,8 +534,9 @@ function findLocalImages(html, contentPath) {
             if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//') || src.startsWith('data:')) {
                 continue;
             }
-            // Resolve to absolute path (relative to content folder)
-            const absPath = path.resolve(contentPath, src);
+            // Resolve to absolute path (relative to content folder's directory)
+            const contentDir = fs.statSync(contentPath).isDirectory() ? contentPath : path.dirname(contentPath);
+            const absPath = path.resolve(contentDir, src);
             if (fs.existsSync(absPath)) {
                 images.push(absPath);
             }
@@ -583,7 +584,7 @@ async function uploadNewImages(browser, page, imagePaths, imageCache) {
             log.error(`    [이미지] 실패: ${path.basename(imagePath)}`);
         }
 
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise(r => setTimeout(r, 50));
     }
 
     return { cache: updatedCache, pathMap };
@@ -1040,7 +1041,7 @@ async function main() {
                 } else {
                     log.verbose(`    실패 (이미 삭제됨)`);
                 }
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 50));
             }
 
             labyMeta.pageIds = pageIds;
@@ -1185,11 +1186,13 @@ async function main() {
                     html = replaceLocalImages(html, pathMap);
                 }
 
-                // Navigate again (upload might have changed page state)
-                await withRetry(
-                    () => navigateToEditPage(page, labyrinthId, pageId),
-                    '페이지 편집 화면 이동'
-                );
+                // Navigate again only if images were uploaded (upload popup changes page state)
+                if (localImages.length > 0) {
+                    await withRetry(
+                        () => navigateToEditPage(page, labyrinthId, pageId),
+                        '페이지 편집 화면 이동'
+                    );
+                }
 
                 // Fill form with full data
                 const isFirst = (firstPage === name);
@@ -1233,27 +1236,38 @@ async function main() {
         }
 
         // Set parent connections
+        // For new/recreated pages, we need to scan ALL pages' answers (not just new/updated)
+        // because existing unchanged pages might have answers pointing to new pages
         const connections = {};
-        const allPagesWithAnswers = [...newPages, ...updatedPages];
+        const newPageIds = new Set(newPages.map(name => pageIdMap[name]).filter(Boolean));
 
-        for (const name of allPagesWithAnswers) {
-            const pageData = pages[name].json;
-            const pageMeta = pages[name].meta;
+        // Scan all pages' answers for connections to new pages
+        for (const [name, pageInfo] of Object.entries(pages)) {
+            const pageData = pageInfo.json;
+            const pageMeta = pageInfo.meta;
             const fromPageId = pageMeta.id;
+
+            if (!fromPageId) continue;
 
             const answers = pageData.answers || [];
             answers.forEach((ans, idx) => {
                 if (ans.next && pageIdMap[ans.next]) {
                     const targetPageId = pageIdMap[ans.next];
-                    if (!connections[targetPageId]) {
-                        connections[targetPageId] = [];
+                    // Only process connections TO new pages, or FROM new/updated pages
+                    const isTargetNew = newPageIds.has(targetPageId);
+                    const isSourceNewOrUpdated = newPages.includes(name) || updatedPages.includes(name);
+
+                    if (isTargetNew || isSourceNewOrUpdated) {
+                        if (!connections[targetPageId]) {
+                            connections[targetPageId] = [];
+                        }
+                        connections[targetPageId].push({
+                            fromPageId: fromPageId,
+                            answerIndex: idx + 1,
+                            fromName: name,
+                            answer: ans.answer
+                        });
                     }
-                    connections[targetPageId].push({
-                        fromPageId: fromPageId,
-                        answerIndex: idx + 1,
-                        fromName: name,
-                        answer: ans.answer
-                    });
                 }
             });
         }
@@ -1288,26 +1302,28 @@ async function main() {
                     () => submitPageForm(page),
                     '페이지 저장'
                 );
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 50));
             }
         }
 
         // Delete unused pages
         if (pagesToDelete.length > 0) {
-            log.verbose('');
-            log.verbose(`  미사용 페이지 삭제 중... (${pagesToDelete.length}개)`);
+            log.info('');
+            log.info(`  미사용 페이지 삭제 중... (${pagesToDelete.length}개)`);
 
             for (const pageId of pagesToDelete) {
-                log.verbose(`  - ID ${pageId} 삭제 중...`);
+                log.item(`ID ${pageId} 삭제 중...`);
                 const success = await deletePage(page, labyrinthId, pageId);
                 if (success) {
                     pageIds = pageIds.filter(id => id !== pageId);
-                    log.verbose(`    삭제됨`);
+                    log.subitem(`삭제됨`);
+                    log.info(`    [테스트] 10초 대기 중... 브라우저에서 확인하세요.`);
+                    await new Promise(r => setTimeout(r, 10000));
                 } else {
-                    log.verbose(`    실패 (이미 삭제됨)`);
+                    log.subitem(`실패 (이미 삭제됨)`);
                     pageIds = pageIds.filter(id => id !== pageId);
                 }
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 50));
             }
 
             labyMeta.pageIds = pageIds;
