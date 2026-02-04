@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const BASE_URL = 'https://www.thelabyrinth.co.kr';
 const os = require('os');
 const { log } = require('./logger');
 
@@ -259,59 +258,11 @@ async function uploadImages(browser, page, imagePaths, imageCache = {}) {
     return { cache: updatedCache, results };
 }
 
-/**
- * Find all image references in HTML content
- * @param {string} html - HTML content
- * @returns {string[]} Array of image paths/URLs found
- */
-function findImageReferences(html) {
-    const images = [];
-    const srcRegex = /src=["']([^"']+\.(png|jpg|jpeg|gif|webp))/gi;
-    let match;
-
-    while ((match = srcRegex.exec(html)) !== null) {
-        images.push(match[1]);
-    }
-
-    return images;
-}
-
-/**
- * Replace image paths in HTML with uploaded URLs
- * @param {string} html - HTML content with local image paths
- * @param {object} pathToUrlMap - Mapping of local paths to uploaded URLs
- * @returns {string} HTML with replaced image URLs
- */
-function replaceImagePaths(html, pathToUrlMap) {
-    let result = html;
-
-    for (const [localPath, url] of Object.entries(pathToUrlMap)) {
-        if (url) {
-            // Replace various path formats
-            const basename = path.basename(localPath);
-            const patterns = [
-                new RegExp(`src=["']([^"']*${basename})["']`, 'gi'),
-                new RegExp(`url\\(["']?([^"'\\)]*${basename})["']?\\)`, 'gi')
-            ];
-
-            for (const pattern of patterns) {
-                result = result.replace(pattern, (match, p1) => {
-                    return match.replace(p1, url);
-                });
-            }
-        }
-    }
-
-    return result;
-}
-
 module.exports = {
     generateRandomId,
     calculateChecksum,
     validateImage,
     uploadImage,
     uploadImages,
-    findImageReferences,
-    replaceImagePaths,
     IMAGE_CONSTRAINTS
 };

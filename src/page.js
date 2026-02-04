@@ -240,35 +240,6 @@ async function fillPageForm(page, data) {
     }
 }
 
-/**
- * Clear all existing answers from the page
- * @param {object} page - Puppeteer page
- */
-async function clearAnswers(page) {
-    // Find all delete buttons and click them
-    let deleted = 0;
-    while (true) {
-        // Use the correct selector: <a class="title-right-link" onclick="deleteAnswer(event, this);">
-        const deleteBtn = await page.$('a[onclick*="deleteAnswer"]');
-        if (!deleteBtn) break;
-
-        // Check if button is visible
-        const isVisible = await deleteBtn.evaluate(el => {
-            const parent = el.closest('tr') || el.closest('div');
-            return parent && parent.style.display !== 'none' && el.offsetParent !== null;
-        });
-
-        if (!isVisible) break;
-
-        await deleteBtn.click();
-        await new Promise(r => setTimeout(r, 100));
-        deleted++;
-    }
-
-    if (deleted > 0) {
-        log.verbose(`    기존 정답 ${deleted}개 삭제됨`);
-    }
-}
 
 /**
  * Add an answer to the page

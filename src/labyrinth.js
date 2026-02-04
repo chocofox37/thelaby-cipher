@@ -11,7 +11,6 @@ const { generateRandomId } = require('./image');
 const { log } = require('./logger');
 
 const REGISTER_URL = 'https://www.thelabyrinth.co.kr/labyrinth/laby/making/registLabyrinth.do';
-const IMAGE_POPUP_URL = 'https://www.thelabyrinth.co.kr/labyrinth/com/comImageFilePopup.do';
 
 /**
  * Default labyrinth config values (site defaults)

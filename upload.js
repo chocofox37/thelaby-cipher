@@ -198,9 +198,7 @@ const {
 } = require('./src/page');
 const {
     calculateChecksum,
-    uploadImage,
-    findImageReferences,
-    replaceImagePaths
+    uploadImage
 } = require('./src/image');
 const { setLogger } = require('./src/logger');
 
@@ -608,9 +606,9 @@ function replaceLocalImages(html, pathMap) {
         const srcPattern = new RegExp(`src=["']([^"']*${escapedBasename})["']`, 'gi');
         result = result.replace(srcPattern, `src="${url}"`);
 
-        // Replace url(...) in CSS
+        // Replace url(...) in CSS - use single quotes to avoid conflict with style="..."
         const urlPattern = new RegExp(`url\\(["']?([^"')]*${escapedBasename})["']?\\)`, 'gi');
-        result = result.replace(urlPattern, `url("${url}")`);
+        result = result.replace(urlPattern, `url('${url}')`);
     }
 
     return result;
