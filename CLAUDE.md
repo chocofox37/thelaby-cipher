@@ -37,7 +37,8 @@ thelaby-cipher/
 │   ├── login.js        # Puppeteer login/logout
 │   ├── labyrinth.js    # Labyrinth CRUD (create, update, validate)
 │   ├── page.js         # Page CRUD (create, update, delete, answers, connections)
-│   └── image.js        # Image upload via SmartEditor2 popup
+│   ├── image.js        # Image upload via SmartEditor2 popup
+│   └── logger.js       # Global logger module for consistent logging
 └── example/            # Example labyrinth content
     ├── labyrinth.json
     ├── account.json    # Credentials (gitignore)
@@ -134,9 +135,11 @@ Direct HTML content that goes into the SmartEditor2.
 
 ## Upload Process
 
-1. Create new pages (with content, answers, images)
-2. Update modified pages (content, answers, images)
-3. Set parent connections (answer -> next page links)
+1. **Login** - Authenticate with account.json credentials
+2. **Labyrinth** - Create or update labyrinth metadata
+3. **Delete unused pages** - Remove pages deleted locally from site
+4. **Create/Update pages** - Upload new and modified pages
+5. **Connect pages** - Set answer -> next page links
 
 ### Page State Detection
 

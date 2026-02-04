@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { generateRandomId } = require('./image');
+const { log } = require('./logger');
 
 const REGISTER_URL = 'https://www.thelabyrinth.co.kr/labyrinth/laby/making/registLabyrinth.do';
 const IMAGE_POPUP_URL = 'https://www.thelabyrinth.co.kr/labyrinth/com/comImageFilePopup.do';
@@ -233,7 +234,7 @@ function tagsToIds(tags) {
             if (id) {
                 ids.push(id);
             } else {
-                console.warn(`[labyrinth] Unknown tag: ${tag}`);
+                log.verbose(`    알 수 없는 태그: ${tag}`);
             }
         }
     }
@@ -249,7 +250,7 @@ async function applyTags(page, tags) {
     const tagIds = tagsToIds(tags);
     if (tagIds.length === 0) return;
 
-    console.log(`[labyrinth] Selecting tags: ${tagIds.join(', ')}`);
+    log.verbose(`    태그 선택: ${tagIds.join(', ')}`);
 
     // First, deselect all currently selected tags using high-level API
     const selectedTags = await page.$$('span.tag.tag_selected');
@@ -335,7 +336,7 @@ async function uploadTitleImage(page, browser, imagePath) {
             });
 
             if (existingFileId) {
-                console.log(`[labyrinth] Deleting existing image (fileId: ${existingFileId})...`);
+                log.verbose(`    기존 이미지 삭제 중 (fileId: ${existingFileId})...`);
 
                 // Click delete link - this opens a confirm popup
                 await deleteLink.click();
@@ -368,7 +369,7 @@ async function uploadTitleImage(page, browser, imagePath) {
         }, { timeout: 30000 });
 
         const fileId = await page.$eval('#fileId', el => el.value || '').catch(() => '');
-        console.log(`[labyrinth] Image uploaded, fileId: ${fileId}`);
+        log.verbose(`    이미지 업로드됨, fileId: ${fileId}`);
 
     } finally {
         // Try to close popup if still open
@@ -426,7 +427,7 @@ async function applyConfigToForm(page, config, options = {}) {
         // Check if element exists before interacting
         const element = await page.$(field.selector);
         if (!element) {
-            console.log(`[labyrinth] Skipping ${key}: selector not found`);
+            log.verbose(`    ${key} 건너뜀: 셀렉터를 찾을 수 없음`);
             continue;
         }
 
@@ -493,22 +494,22 @@ async function createLabyrinth(page, config, options = {}) {
         throw new Error('미궁 제목이 필요합니다');
     }
 
-    console.log('[labyrinth] Navigating to registration page...');
+    log.verbose('    등록 화면으로 이동 중...');
     await page.goto(REGISTER_URL, { waitUntil: 'networkidle2' });
 
-    console.log('[labyrinth] Filling form...');
+    log.verbose('    폼 작성 중...');
     await applyConfigToForm(page, config, options);
 
     // Click create button
-    console.log('[labyrinth] Submitting form...');
+    log.verbose('    폼 제출 중...');
     await page.click('#createLabyrinth');
 
     // Wait for custom confirm popup
-    console.log('[labyrinth] Waiting for confirm popup...');
+    log.verbose('    확인 팝업 대기 중...');
     await page.waitForSelector('#labyPopupOk', { visible: true, timeout: 5000 });
 
     // Click confirm button and wait for navigation
-    console.log('[labyrinth] Clicking confirm...');
+    log.verbose('    확인 클릭 중...');
     await Promise.all([
         page.waitForNavigation({ waitUntil: 'networkidle2' }),
         page.click('#labyPopupOk')
@@ -516,7 +517,7 @@ async function createLabyrinth(page, config, options = {}) {
 
     // Extract labyrinthSeqn
     const currentUrl = page.url();
-    console.log('[labyrinth] Current URL after creation:', currentUrl);
+    log.verbose(`    생성 후 URL: ${currentUrl}`);
 
     let labyrinthSeqn = null;
 
@@ -547,7 +548,7 @@ async function createLabyrinth(page, config, options = {}) {
         throw new Error('미궁 생성 후 ID를 가져올 수 없습니다. 사이트를 확인해주세요.');
     }
 
-    console.log('[labyrinth] Created labyrinth ID:', labyrinthSeqn);
+    log.verbose(`    미궁 생성됨 (ID: ${labyrinthSeqn})`);
     return labyrinthSeqn;
 }
 
@@ -562,14 +563,14 @@ async function createLabyrinth(page, config, options = {}) {
  */
 async function updateLabyrinth(page, labyrinthSeqn, config, options = {}) {
     const editUrl = `${REGISTER_URL}?labyrinthSeqn=${labyrinthSeqn}`;
-    console.log('[labyrinth] Navigating to edit page...');
+    log.verbose('    편집 화면으로 이동 중...');
     await page.goto(editUrl, { waitUntil: 'networkidle2' });
 
-    console.log('[labyrinth] Applying config...');
+    log.verbose('    설정 적용 중...');
     await applyConfigToForm(page, config, options);
 
     // Click modify button
-    console.log('[labyrinth] Submitting update...');
+    log.verbose('    수정 제출 중...');
     await page.click('#modifyLabyrinth');
 
     // Wait for custom confirm popup
@@ -581,7 +582,7 @@ async function updateLabyrinth(page, labyrinthSeqn, config, options = {}) {
         page.click('#labyPopupOk')
     ]);
 
-    console.log('[labyrinth] Updated successfully');
+    log.verbose('    수정 완료');
 }
 
 module.exports = {

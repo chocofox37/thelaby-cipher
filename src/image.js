@@ -9,6 +9,7 @@ const crypto = require('crypto');
 
 const BASE_URL = 'https://www.thelabyrinth.co.kr';
 const os = require('os');
+const { log } = require('./logger');
 
 /**
  * Generate random alphanumeric string
@@ -42,7 +43,7 @@ const IMAGE_CONSTRAINTS = {
 function validateImage(filePath) {
     // Check if file exists
     if (!fs.existsSync(filePath)) {
-        return { valid: false, error: `File not found: ${filePath}` };
+        return { valid: false, error: `파일을 찾을 수 없습니다: ${filePath}` };
     }
 
     // Check file extension
@@ -50,7 +51,7 @@ function validateImage(filePath) {
     if (!IMAGE_CONSTRAINTS.allowedFormats.includes(ext)) {
         return {
             valid: false,
-            error: `Unsupported image format: ${ext} (allowed: ${IMAGE_CONSTRAINTS.allowedFormats.join(', ')})`
+            error: `지원하지 않는 이미지 형식: ${ext} (허용: ${IMAGE_CONSTRAINTS.allowedFormats.join(', ')})`
         };
     }
 
@@ -60,7 +61,7 @@ function validateImage(filePath) {
         const sizeMB = (stats.size / 1024 / 1024).toFixed(2);
         return {
             valid: false,
-            error: `Image too large: ${sizeMB}MB (max: ${IMAGE_CONSTRAINTS.maxSizeMB}MB)`
+            error: `이미지 크기 초과: ${sizeMB}MB (최대: ${IMAGE_CONSTRAINTS.maxSizeMB}MB)`
         };
     }
 
@@ -88,7 +89,7 @@ async function uploadImage(browser, page, imagePath) {
     // Validate image first
     const validation = validateImage(imagePath);
     if (!validation.valid) {
-        console.error(`이미지 검증 실패: ${validation.error}`);
+        log.fail(`이미지 검증 실패: ${validation.error}`);
         return null;
     }
 
@@ -105,7 +106,7 @@ async function uploadImage(browser, page, imagePath) {
     // Get fileActionURL from main page (read-only)
     const fileActionURL = await page.evaluate(() => window.fileActionURL);
     if (!fileActionURL) {
-        console.error('페이지에서 업로드 URL을 찾을 수 없습니다');
+        log.fail('페이지에서 업로드 URL을 찾을 수 없습니다');
         fs.unlinkSync(tempPath);
         return null;
     }
@@ -114,7 +115,7 @@ async function uploadImage(browser, page, imagePath) {
     const frames = page.frames();
     const editorFrame = frames.find(f => f.url().includes('smarteditor'));
     if (!editorFrame) {
-        console.error('에디터를 찾을 수 없습니다');
+        log.fail('에디터를 찾을 수 없습니다');
         fs.unlinkSync(tempPath);
         return null;
     }
@@ -122,7 +123,7 @@ async function uploadImage(browser, page, imagePath) {
     // Click photo button to open popup using high-level API
     const photoBtn = await editorFrame.$('button.se2_photo');
     if (!photoBtn) {
-        console.error('이미지 버튼을 찾을 수 없습니다');
+        log.fail('이미지 버튼을 찾을 수 없습니다');
         fs.unlinkSync(tempPath);
         return null;
     }
@@ -142,7 +143,7 @@ async function uploadImage(browser, page, imagePath) {
     }
 
     if (!popupPage) {
-        console.error('이미지 업로드 팝업을 찾을 수 없습니다');
+        log.fail('이미지 업로드 팝업을 찾을 수 없습니다');
         fs.unlinkSync(tempPath);
         return null;
     }
@@ -153,7 +154,7 @@ async function uploadImage(browser, page, imagePath) {
         // Set file on input using Puppeteer's uploadFile (this triggers events automatically)
         const fileInput = await popupPage.$('#uploadInputBox');
         if (!fileInput) {
-            console.error('파일 입력창을 찾을 수 없습니다');
+            log.fail('파일 입력창을 찾을 수 없습니다');
             await popupPage.close();
             fs.unlinkSync(tempPath);
             return null;
@@ -234,20 +235,20 @@ async function uploadImages(browser, page, imagePaths, imageCache = {}) {
 
         // Check if already uploaded
         if (updatedCache[checksum]) {
-            console.log(`[image] Skipping ${path.basename(imagePath)} (already uploaded)`);
+            log.verbose(`      ${path.basename(imagePath)} (이미 업로드됨)`);
             results[imagePath] = updatedCache[checksum];
             continue;
         }
 
-        console.log(`[image] Uploading ${path.basename(imagePath)}...`);
+        log.verbose(`      ${path.basename(imagePath)} 업로드 중...`);
         const url = await uploadImage(browser, page, imagePath);
 
         if (url) {
             updatedCache[checksum] = url;
             results[imagePath] = url;
-            console.log(`[image] Uploaded: ${url}`);
+            log.verbose(`      업로드됨: ${url}`);
         } else {
-            console.error(`[image] Failed to upload ${path.basename(imagePath)}`);
+            log.fail(`${path.basename(imagePath)} 업로드 실패`);
             results[imagePath] = null;
         }
 

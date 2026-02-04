@@ -202,6 +202,7 @@ const {
     findImageReferences,
     replaceImagePaths
 } = require('./src/image');
+const { setLogger } = require('./src/logger');
 
 /**
  * Load account credentials from account.json
@@ -725,6 +726,9 @@ async function main() {
     const args = parseArgs();
     OPTIONS = args;
 
+    // Set global logger for submodules
+    setLogger(log);
+
     // Show help if requested
     if (args.help) {
         showHelp();
@@ -791,9 +795,12 @@ async function main() {
 
     let browser, page;
 
+    // Counters for final summary
+    const counts = { deleted: 0, created: 0, updated: 0, connected: 0, failures: { image: 0, page: 0, connect: 0 } };
+
     try {
         // Login with retry
-        log.section(1, 3, '로그인 중...');
+        log.section(1, 5, '로그인');
         ({ browser, page } = await withRetry(
             () => login({
                 email: account.email,
@@ -802,7 +809,7 @@ async function main() {
             }),
             '로그인'
         ));
-        log.info('  로그인 성공');
+        log.item('완료');
 
         // Check if labyrinth.meta exists
         let labyMeta = {};
@@ -831,7 +838,7 @@ async function main() {
         // Create or update labyrinth (with retry)
         log.info('');
         if (!labyMeta.id) {
-            log.section(2, 3, '미궁 생성 중...');
+            log.section(2, 5, '미궁 생성');
             const labyrinthId = await withRetry(
                 () => createLabyrinth(page, config, options),
                 '미궁 생성'
@@ -842,9 +849,9 @@ async function main() {
             labyMeta.images = labyMeta.images || {};
             labyMeta.pageIds = labyMeta.pageIds || [];
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-            log.info(`  미궁 생성 완료 (ID: ${labyrinthId})`);
+            log.item(`완료 (ID: ${labyrinthId})`);
         } else if (labyMeta.hash !== currentHash) {
-            log.section(2, 3, '미궁 정보 수정 중...');
+            log.section(2, 5, '미궁 정보 수정');
             await withRetry(
                 () => updateLabyrinth(page, labyMeta.id, config, options),
                 '미궁 수정'
@@ -852,9 +859,9 @@ async function main() {
 
             labyMeta.hash = currentHash;
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-            log.info('  미궁 정보 수정 완료');
+            log.item('완료');
         } else {
-            log.section(2, 3, '미궁 정보 변경 없음');
+            log.section(2, 5, '미궁 정보 (변경 없음)');
         }
 
         const labyrinthId = labyMeta.id;
@@ -862,8 +869,8 @@ async function main() {
         let pageIds = labyMeta.pageIds || [];
 
         // Find all page files
-        log.info('');
-        log.section(3, 3, '페이지 처리 중...');
+        log.verbose('');
+        log.verbose('  페이지 파일 스캔 중...');
         const htmlNames = findPageHtmlFiles(contentPath);
         const jsonNames = findPageJsonFiles(contentPath);
         const metaNames = findPageMetaFiles(contentPath);
@@ -1020,39 +1027,53 @@ async function main() {
             metasToDelete.push(item.name);
         }
 
-        log.info(`  신규: ${newPages.length}, 수정: ${updatedPages.length}, 변경없음: ${unchangedPages.length}`);
-        if (pagesToDelete.length > 0) {
-            log.info(`  삭제 예정: ${pagesToDelete.length}`);
-        }
+        log.verbose(`  신규: ${newPages.length}, 수정: ${updatedPages.length}, 변경없음: ${unchangedPages.length}`);
+        log.verbose(`  삭제 예정: ${pagesToDelete.length + pagesToDeleteBeforeRecreate.length}`);
 
         // ============================================================
-        // Pre-phase: Delete pages that need recreation
+        // Step 3: Delete unused pages (including pages that need recreation)
         // ============================================================
-        if (pagesToDeleteBeforeRecreate.length > 0) {
-            log.verbose('');
-            log.verbose(`  재생성을 위해 기존 페이지 삭제 중... (${pagesToDeleteBeforeRecreate.length}개)`);
-
-            for (const pageId of pagesToDeleteBeforeRecreate) {
-                log.verbose(`  - ID ${pageId} 삭제 중...`);
+        const allPagesToDelete = [...pagesToDelete, ...pagesToDeleteBeforeRecreate];
+        log.info('');
+        log.section(3, 5, '미사용 페이지 삭제');
+        if (allPagesToDelete.length > 0) {
+            for (let i = 0; i < allPagesToDelete.length; i++) {
+                const pageId = allPagesToDelete[i];
+                log.progress(i + 1, allPagesToDelete.length, `ID: ${pageId}`);
                 const success = await deletePage(page, labyrinthId, pageId);
                 if (success) {
                     pageIds = pageIds.filter(id => id !== pageId);
+                    counts.deleted++;
                     log.verbose(`    삭제됨`);
                 } else {
                     log.verbose(`    실패 (이미 삭제됨)`);
+                    pageIds = pageIds.filter(id => id !== pageId);
                 }
                 await new Promise(r => setTimeout(r, 50));
             }
 
             labyMeta.pageIds = pageIds;
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
+            log.item('완료');
+        } else {
+            log.item('삭제할 페이지 없음');
         }
 
-        // Create new pages
-        if (newPages.length > 0) {
-            log.info('');
-            log.info(`  신규 페이지 생성 중...`);
+        // Clean up unused meta files
+        if (metasToDelete.length > 0) {
+            log.verbose(`  메타 파일 정리 중... (${metasToDelete.length}개)`);
+            for (const name of metasToDelete) {
+                deletePageMeta(contentPath, name);
+                log.verbose(`    ${name}.meta 삭제됨`);
+            }
+        }
 
+        // ============================================================
+        // Step 4: Create new pages
+        // ============================================================
+        log.info('');
+        log.section(4, 5, '페이지 생성');
+        if (newPages.length > 0) {
             for (let i = 0; i < newPages.length; i++) {
                 const name = newPages[i];
                 const pageData = pages[name].json;
@@ -1126,14 +1147,19 @@ async function main() {
                         pageIds.push(pageId);
                     }
 
-                    log.info(`    생성됨 (ID: ${pageId})`);
+                    counts.created++;
+                    log.verbose(`    생성됨 (ID: ${pageId})`);
                 } else {
-                    log.error(`    생성 실패: 페이지 ID를 받아올 수 없습니다`);
+                    counts.failures.page++;
+                    log.fail(`${name}: 페이지 ID를 받아올 수 없습니다`);
                 }
             }
 
             labyMeta.pageIds = pageIds;
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
+            log.item('완료');
+        } else {
+            log.item('생성할 페이지 없음');
         }
 
         // Build page name -> ID mapping
@@ -1147,7 +1173,7 @@ async function main() {
         // Update modified pages
         if (updatedPages.length > 0) {
             log.info('');
-            log.info(`  수정된 페이지 업데이트 중...`);
+            log.info('  페이지 수정');
 
             for (let i = 0; i < updatedPages.length; i++) {
                 const name = updatedPages[i];
@@ -1231,11 +1257,15 @@ async function main() {
                 pageMeta.is_ending = isEnding;
                 writePageMeta(contentPath, name, pageMeta);
 
-                log.info(`    수정됨`);
+                counts.updated++;
+                log.verbose(`    수정됨`);
             }
+            log.item('완료');
         }
 
-        // Set parent connections
+        // ============================================================
+        // Step 5: Set parent connections
+        // ============================================================
         // For new/recreated pages, we need to scan ALL pages' answers (not just new/updated)
         // because existing unchanged pages might have answers pointing to new pages
         const connections = {};
@@ -1273,15 +1303,15 @@ async function main() {
         }
 
         const targetPages = Object.keys(connections);
+        log.info('');
+        log.section(5, 5, '페이지 연결');
         if (targetPages.length > 0) {
-            log.verbose('');
-            log.verbose(`  페이지 연결 설정 중... (${targetPages.length}개)`);
-
-            for (const targetPageId of targetPages) {
+            for (let i = 0; i < targetPages.length; i++) {
+                const targetPageId = targetPages[i];
                 const sources = connections[targetPageId];
                 const targetName = Object.entries(pageIdMap).find(([n, id]) => id === targetPageId)?.[0] || targetPageId;
 
-                log.verbose(`  - ${targetName} (ID: ${targetPageId})`);
+                log.progress(i + 1, targetPages.length, targetName);
 
                 await withRetry(
                     () => navigateToEditPage(page, labyrinthId, targetPageId),
@@ -1289,12 +1319,15 @@ async function main() {
                 );
                 await clearParentConnections(page);
 
+                let connectionSuccess = true;
                 for (const src of sources) {
                     const success = await setParentConnection(page, src.fromPageId, src.answerIndex);
                     if (success) {
                         log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
                     } else {
                         log.verbose(`    <- ${src.fromName} [실패]`);
+                        connectionSuccess = false;
+                        counts.failures.connect++;
                     }
                 }
 
@@ -1302,54 +1335,42 @@ async function main() {
                     () => submitPageForm(page),
                     '페이지 저장'
                 );
-                await new Promise(r => setTimeout(r, 50));
-            }
-        }
-
-        // Delete unused pages
-        if (pagesToDelete.length > 0) {
-            log.info('');
-            log.info(`  미사용 페이지 삭제 중... (${pagesToDelete.length}개)`);
-
-            for (const pageId of pagesToDelete) {
-                log.item(`ID ${pageId} 삭제 중...`);
-                const success = await deletePage(page, labyrinthId, pageId);
-                if (success) {
-                    pageIds = pageIds.filter(id => id !== pageId);
-                    log.subitem(`삭제됨`);
-                    log.info(`    [테스트] 10초 대기 중... 브라우저에서 확인하세요.`);
-                    await new Promise(r => setTimeout(r, 10000));
-                } else {
-                    log.subitem(`실패 (이미 삭제됨)`);
-                    pageIds = pageIds.filter(id => id !== pageId);
+                if (connectionSuccess) {
+                    counts.connected++;
                 }
                 await new Promise(r => setTimeout(r, 50));
             }
-
-            labyMeta.pageIds = pageIds;
-            fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-        }
-
-        // Clean up unused meta files
-        if (metasToDelete.length > 0) {
-            log.verbose('');
-            log.verbose(`  메타 파일 정리 중... (${metasToDelete.length}개)`);
-            for (const name of metasToDelete) {
-                deletePageMeta(contentPath, name);
-                log.verbose(`  - ${name}.meta 삭제됨`);
-            }
+            log.item('완료');
+        } else {
+            log.item('연결할 페이지 없음');
         }
 
         // Final summary
         log.info('');
-        log.info('=== 업로드 완료 ===');
-        log.info(`미궁 ID: ${labyrinthId}`);
-        log.info(`페이지: ${Object.keys(pages).length}개`);
-        log.verbose(`  등록된 ID: ${pageIds.length}개`);
-        log.verbose(`  이미지 캐시: ${Object.keys(imageCache).length}개`);
-        if (pagesToDelete.length > 0) {
-            log.info(`삭제됨: ${pagesToDelete.length}개`);
+        const summaryParts = [];
+        if (counts.deleted > 0) summaryParts.push(`삭제 ${counts.deleted}`);
+        if (counts.created > 0) summaryParts.push(`생성 ${counts.created}`);
+        if (counts.updated > 0) summaryParts.push(`수정 ${counts.updated}`);
+        if (counts.connected > 0) summaryParts.push(`연결 ${counts.connected}`);
+
+        const totalFailures = counts.failures.image + counts.failures.page + counts.failures.connect;
+        if (summaryParts.length > 0 || totalFailures > 0) {
+            log.info(`업로드 완료! (${summaryParts.join(', ') || '변경 없음'})`);
+        } else {
+            log.info('업로드 완료! (변경 없음)');
         }
+
+        if (totalFailures > 0) {
+            const failParts = [];
+            if (counts.failures.image > 0) failParts.push(`이미지 ${counts.failures.image}`);
+            if (counts.failures.page > 0) failParts.push(`페이지 ${counts.failures.page}`);
+            if (counts.failures.connect > 0) failParts.push(`연결 ${counts.failures.connect}`);
+            log.error(`  실패: ${failParts.join(', ')} (다음 실행 시 재시도됨)`);
+        }
+
+        log.verbose(`  미궁 ID: ${labyrinthId}`);
+        log.verbose(`  총 페이지: ${Object.keys(pages).length}개`);
+        log.verbose(`  이미지 캐시: ${Object.keys(imageCache).length}개`);
 
     } catch (error) {
         log.error('');

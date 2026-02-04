@@ -3,6 +3,8 @@
  * Handles page CRUD operations on The Labyrinth site
  */
 
+const { log } = require('./logger');
+
 const BASE_URL = 'https://www.thelabyrinth.co.kr';
 
 /**
@@ -21,7 +23,7 @@ async function navigateToCreatePage(page, labyrinthId) {
         const input = document.querySelector('input[name="labyrinthSeqn"]');
         return input ? input.value : null;
     });
-    console.log('[page] labyrinthSeqn in form:', labyrinthSeqnSet);
+    log.verbose(`    폼에 labyrinthSeqn 설정됨: ${labyrinthSeqnSet}`);
 }
 
 /**
@@ -43,9 +45,9 @@ async function navigateToEditPage(page, labyrinthId, pageId) {
 
     if (linkElement) {
         await linkElement.click();
-        console.log('[page] Navigate to edit: link clicked');
+        log.verbose(`    편집 화면 링크 클릭됨`);
     } else {
-        console.log('[page] Navigate to edit: link not found');
+        log.verbose(`    편집 화면 링크를 찾을 수 없음`);
     }
 
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
@@ -98,7 +100,7 @@ async function setEditorContent(page, html) {
     // Wait for editor to be ready
     const editorReady = await waitForEditor(page);
     if (!editorReady) {
-        console.error('에디터가 준비되지 않았습니다 (타임아웃)');
+        log.fail('에디터가 준비되지 않았습니다 (타임아웃)');
         return false;
     }
 
@@ -125,7 +127,7 @@ async function setEditorContent(page, html) {
     }, html);
 
     if (!result.success) {
-        console.error('에디터 콘텐츠 설정 실패');
+        log.fail('에디터 콘텐츠 설정 실패');
         return false;
     }
 
@@ -233,7 +235,7 @@ async function fillPageForm(page, data) {
     if (data.content) {
         const contentSet = await setEditorContent(page, data.content);
         if (!contentSet) {
-            console.error('에디터 콘텐츠 설정에 실패했습니다');
+            log.fail('에디터 콘텐츠 설정에 실패했습니다');
         }
     }
 }
@@ -264,7 +266,7 @@ async function clearAnswers(page) {
     }
 
     if (deleted > 0) {
-        console.log(`[page] clearAnswers: deleted ${deleted} existing answers`);
+        log.verbose(`    기존 정답 ${deleted}개 삭제됨`);
     }
 }
 
@@ -308,7 +310,7 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
                 });
 
                 await addBtn.click();
-                console.log('[page] addAnswer: clicked add button for new row');
+                log.verbose(`    정답추가 버튼 클릭`);
 
                 // Wait for new row to appear
                 await page.waitForFunction((prevCount) => {
@@ -319,10 +321,10 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
                     return inputs.length > prevCount;
                 }, { timeout: 5000 }, countBefore);
             } else {
-                console.log('[page] addAnswer: add button is disabled');
+                log.verbose(`    정답추가 버튼 비활성화됨`);
             }
         } else {
-            console.log('[page] addAnswer: add button not found');
+            log.verbose(`    정답추가 버튼을 찾을 수 없음`);
         }
     }
 
@@ -353,7 +355,7 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
     }
 
     if (!filled || !answerInputEl) {
-        console.log('[page] addAnswer result: no empty slot found');
+        log.verbose(`    빈 정답 슬롯을 찾을 수 없음`);
         return 'no empty slot';
     }
 
@@ -393,7 +395,7 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
         }
     }
 
-    console.log(`[page] addAnswer result: filled`);
+    log.verbose(`    정답 입력됨`);
     return 'filled';
 }
 
@@ -494,12 +496,12 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     }
 
     if (!saveBtn) {
-        console.log('[page] Save button not found');
+        log.verbose(`    저장 버튼을 찾을 수 없음`);
         return null;
     }
 
     // Click save button
-    console.log('[page] Clicking save button...');
+    log.verbose(`    저장 버튼 클릭...`);
     await saveBtn.click();
 
     // Wait for popup and click OK
@@ -508,21 +510,21 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     // Click the OK button
     try {
         await page.click('#labyPopupOk');
-        console.log('[page] Clicked confirm OK');
+        log.verbose(`    확인 팝업 클릭`);
     } catch (e) {}
 
     // Wait for possible second popup (success) and click OK
     await new Promise(r => setTimeout(r, 100));
     try {
         await page.click('#labyPopupOk');
-        console.log('[page] Clicked success OK');
+        log.verbose(`    완료 팝업 클릭`);
     } catch (e) {}
 
     // Wait for navigation
     await new Promise(r => setTimeout(r, 100));
 
     const currentUrl = await page.url();
-    console.log('[page] URL:', currentUrl);
+    log.verbose(`    현재 URL: ${currentUrl}`);
 
     // Extract page ID from URL or form
     let newPageId = await page.evaluate(() => {
@@ -531,13 +533,13 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     });
 
     if (newPageId) {
-        console.log('[page] Page ID:', newPageId);
+        log.verbose(`    페이지 ID: ${newPageId}`);
         return newPageId;
     }
 
     // Search in page list
     if (labyrinthId) {
-        console.log('[page] Checking page list...');
+        log.verbose(`    페이지 목록에서 검색 중...`);
         await page.goto(`${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`,
                         { waitUntil: 'networkidle2', timeout: 60000 });
         await new Promise(r => setTimeout(r, 100));
@@ -554,7 +556,7 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
             return maxId;
         });
 
-        if (newPageId) console.log('[page] Found:', newPageId);
+        if (newPageId) log.verbose(`    발견됨: ${newPageId}`);
     }
 
     return newPageId;
@@ -569,7 +571,7 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
  * @returns {Promise<string|null>} New page ID
  */
 async function createPage(browser, page, labyrinthId, pageData) {
-    console.log('[page] Creating page:', pageData.title);
+    log.verbose(`    페이지 생성 중: ${pageData.title}`);
 
     await navigateToCreatePage(page, labyrinthId);
     await fillPageForm(page, pageData);
@@ -582,7 +584,7 @@ async function createPage(browser, page, labyrinthId, pageData) {
     }
 
     const pageId = await submitPageForm(page, labyrinthId, pageData.title);
-    console.log('[page] Created page with ID:', pageId);
+    log.verbose(`    페이지 생성됨 (ID: ${pageId})`);
     return pageId;
 }
 
@@ -596,7 +598,7 @@ async function createPage(browser, page, labyrinthId, pageData) {
  * @returns {Promise<boolean>} Success
  */
 async function updatePage(browser, page, labyrinthId, pageId, pageData) {
-    console.log('[page] Updating page:', pageId);
+    log.verbose(`    페이지 수정 중: ${pageId}`);
 
     await navigateToEditPage(page, labyrinthId, pageId);
     await fillPageForm(page, pageData);
@@ -610,7 +612,7 @@ async function updatePage(browser, page, labyrinthId, pageId, pageData) {
     }
 
     await submitPageForm(page);
-    console.log('[page] Updated page:', pageId);
+    log.verbose(`    페이지 수정됨: ${pageId}`);
     return true;
 }
 
@@ -664,7 +666,7 @@ async function setParentConnection(page, parentPageId, answerIndex = 1) {
         if (!isChecked) {
             await checkbox.click();
         }
-        console.log(`[page] Set parent connection: ${checkboxValue}`);
+        log.verbose(`    부모 연결 설정됨: ${checkboxValue}`);
         return true;
     }
 
@@ -676,8 +678,8 @@ async function setParentConnection(page, parentPageId, answerIndex = 1) {
         }))
     );
 
-    console.log(`[page] Failed to set parent connection. Wanted: ${checkboxValue}`);
-    console.log('[page] Available:', available);
+    log.error(`    부모 연결 실패. 필요: ${checkboxValue}`);
+    log.verbose(`    사용 가능한 연결: ${JSON.stringify(available)}`);
     return false;
 }
 
@@ -726,7 +728,7 @@ async function getParentConnections(page) {
  * @returns {Promise<boolean>} Success
  */
 async function deletePage(page, labyrinthId, pageId) {
-    console.log('[page] Deleting page:', pageId);
+    log.verbose(`    페이지 삭제 중: ${pageId}`);
 
     // Navigate to the page edit screen
     await navigateToEditPage(page, labyrinthId, pageId);
@@ -745,11 +747,11 @@ async function deletePage(page, labyrinthId, pageId) {
             await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
         }
 
-        console.log('[page] Deleted page:', pageId);
+        log.verbose(`    페이지 삭제됨: ${pageId}`);
         return true;
     }
 
-    console.log('[page] Delete button (#remove) not found on edit page');
+    log.verbose(`    삭제 버튼(#remove)을 찾을 수 없음`);
     return false;
 }
 
