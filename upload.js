@@ -800,7 +800,7 @@ async function main() {
 
     try {
         // Login with retry
-        log.section(1, 5, '로그인');
+        log.section(1, 6, '로그인');
         ({ browser, page } = await withRetry(
             () => login({
                 email: account.email,
@@ -838,7 +838,7 @@ async function main() {
         // Create or update labyrinth (with retry)
         log.info('');
         if (!labyMeta.id) {
-            log.section(2, 5, '미궁 생성');
+            log.section(2, 6, '미궁 생성');
             const labyrinthId = await withRetry(
                 () => createLabyrinth(page, config, options),
                 '미궁 생성'
@@ -851,7 +851,7 @@ async function main() {
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
             log.item(`완료 (ID: ${labyrinthId})`);
         } else if (labyMeta.hash !== currentHash) {
-            log.section(2, 5, '미궁 정보 수정');
+            log.section(2, 6, '미궁 정보 수정');
             await withRetry(
                 () => updateLabyrinth(page, labyMeta.id, config, options),
                 '미궁 수정'
@@ -861,7 +861,7 @@ async function main() {
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
             log.item('완료');
         } else {
-            log.section(2, 5, '미궁 정보 (변경 없음)');
+            log.section(2, 6, '미궁 정보 (변경 없음)');
         }
 
         const labyrinthId = labyMeta.id;
@@ -1035,7 +1035,7 @@ async function main() {
         // ============================================================
         const allPagesToDelete = [...pagesToDelete, ...pagesToDeleteBeforeRecreate];
         log.info('');
-        log.section(3, 5, '미사용 페이지 삭제');
+        log.section(3, 6, '미사용 페이지 삭제');
         if (allPagesToDelete.length > 0) {
             for (let i = 0; i < allPagesToDelete.length; i++) {
                 const pageId = allPagesToDelete[i];
@@ -1072,7 +1072,7 @@ async function main() {
         // Step 4: Create new pages
         // ============================================================
         log.info('');
-        log.section(4, 5, '페이지 생성');
+        log.section(4, 6, '페이지 생성');
         if (newPages.length > 0) {
             for (let i = 0; i < newPages.length; i++) {
                 const name = newPages[i];
@@ -1171,9 +1171,9 @@ async function main() {
         }
 
         // Update modified pages
+        log.info('');
+        log.section(5, 6, '페이지 수정');
         if (updatedPages.length > 0) {
-            log.info('');
-            log.info('  페이지 수정');
 
             for (let i = 0; i < updatedPages.length; i++) {
                 const name = updatedPages[i];
@@ -1261,10 +1261,12 @@ async function main() {
                 log.verbose(`    수정됨`);
             }
             log.item('완료');
+        } else {
+            log.item('수정할 페이지 없음');
         }
 
         // ============================================================
-        // Step 5: Set parent connections
+        // Step 6: Set parent connections
         // ============================================================
         // For new/recreated pages, we need to scan ALL pages' answers (not just new/updated)
         // because existing unchanged pages might have answers pointing to new pages
@@ -1304,7 +1306,7 @@ async function main() {
 
         const targetPages = Object.keys(connections);
         log.info('');
-        log.section(5, 5, '페이지 연결');
+        log.section(6, 6, '페이지 연결');
         if (targetPages.length > 0) {
             for (let i = 0; i < targetPages.length; i++) {
                 const targetPageId = targetPages[i];

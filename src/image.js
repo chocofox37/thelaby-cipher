@@ -181,7 +181,7 @@ async function uploadImage(browser, page, imagePath) {
                 } catch (e) {}
             }
             return false;
-        }, { timeout: 30000 });
+        }, { timeout: 20000 });
 
         // Extract image URL from iframe
         const iframeData = await popupPage.evaluate(() => {

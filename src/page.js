@@ -15,7 +15,7 @@ const BASE_URL = 'https://www.thelabyrinth.co.kr';
 async function navigateToCreatePage(page, labyrinthId) {
     // Navigate directly to the create page with labyrinthSeqn
     const createUrl = `${BASE_URL}/labyrinth/laby/quest/registQuestion.do?labyrinthSeqn=${labyrinthId}`;
-    await page.goto(createUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(createUrl, { waitUntil: 'networkidle2', timeout: 20000 });
     await new Promise(r => setTimeout(r, 100));
 
     // Verify labyrinthSeqn is set
@@ -36,7 +36,7 @@ async function navigateToCreatePage(page, labyrinthId) {
 async function navigateToEditPage(page, labyrinthId, pageId) {
     // First go to page list
     const listUrl = `${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`;
-    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 20000 });
     await new Promise(r => setTimeout(r, 100));
 
     // Find and click the page link - look for onclick containing fn_click with pageId
@@ -50,7 +50,7 @@ async function navigateToEditPage(page, labyrinthId, pageId) {
         log.verbose(`    편집 화면 링크를 찾을 수 없음`);
     }
 
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 100));
 }
 
@@ -76,7 +76,7 @@ async function getEditorContent(page) {
  * @param {number} timeout - Timeout in ms
  * @returns {boolean} True if editor is ready
  */
-async function waitForEditor(page, timeout = 10000) {
+async function waitForEditor(page, timeout = 20000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
         const ready = await page.evaluate(() => {
@@ -541,7 +541,7 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     if (labyrinthId) {
         log.verbose(`    페이지 목록에서 검색 중...`);
         await page.goto(`${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`,
-                        { waitUntil: 'networkidle2', timeout: 60000 });
+                        { waitUntil: 'networkidle2', timeout: 20000 });
         await new Promise(r => setTimeout(r, 100));
 
         newPageId = await page.evaluate(() => {
@@ -624,7 +624,7 @@ async function updatePage(browser, page, labyrinthId, pageId, pageData) {
  */
 async function getPageList(page, labyrinthId) {
     const listUrl = `${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`;
-    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 20000 });
 
     const pages = await page.evaluate(() => {
         const result = [];
@@ -744,7 +744,7 @@ async function deletePage(page, labyrinthId, pageId) {
         const confirmBtn = await page.$('#labyPopupOk');
         if (confirmBtn) {
             await confirmBtn.click();
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {});
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
         }
 
         log.verbose(`    페이지 삭제됨: ${pageId}`);

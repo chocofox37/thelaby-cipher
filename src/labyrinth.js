@@ -319,7 +319,7 @@ async function uploadTitleImage(page, browser, imagePath) {
 
     // Wait for the popup window to open
     const popupPage = await popupPromise;
-    await popupPage.waitForSelector('#atchFileUpload', { timeout: 10000 });
+    await popupPage.waitForSelector('#atchFileUpload', { timeout: 20000 });
 
     try {
         // Clear fileId on parent page first to detect new upload
@@ -347,8 +347,8 @@ async function uploadTitleImage(page, browser, imagePath) {
                 await popupPage.click('#labyPopupOk');
 
                 // Wait for page to reload after deletion
-                await popupPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
-                await popupPage.waitForSelector('#atchFileUpload', { timeout: 10000 });
+                await popupPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+                await popupPage.waitForSelector('#atchFileUpload', { timeout: 20000 });
             }
         }
 
@@ -366,7 +366,7 @@ async function uploadTitleImage(page, browser, imagePath) {
         await page.waitForFunction(() => {
             const el = document.querySelector('#fileId');
             return el && el.value && el.value.trim() !== '';
-        }, { timeout: 30000 });
+        }, { timeout: 20000 });
 
         const fileId = await page.$eval('#fileId', el => el.value || '').catch(() => '');
         log.verbose(`    이미지 업로드됨, fileId: ${fileId}`);
