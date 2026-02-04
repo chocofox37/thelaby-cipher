@@ -86,7 +86,7 @@ Credentials are stored separately from labyrinth config.
     "image": "./image/title.jpg",
     "description": "설명",
     "tags": ["puzzle", "short"],
-    "start_page": "start",
+    "start_page": "시작-페이지-경로",
     ...
 }
 ```
@@ -121,7 +121,7 @@ Direct HTML content that goes into the SmartEditor2.
     "title": "페이지 제목",
     "background_color": "#000000",
     "answers": [
-        { "answer": "정답", "next": "page-b", "public": false }
+        { "answer": "정답", "next": "다음-페이지-경로", "public": false }
     ],
     "is_ending": false
 }

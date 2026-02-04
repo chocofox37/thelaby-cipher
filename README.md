@@ -110,7 +110,7 @@ my-labyrinth/
     "image": "./image/title.jpg",
     "description": "미궁 설명",
     "tags": ["puzzle", "short"],
-    "start_page": "start",
+    "start_page": "시작-페이지-경로",
     "allow_rating": true,
     "show_difficulty": true,
     "clear_visibility": "full"
@@ -125,7 +125,7 @@ my-labyrinth/
 | `image` | string | 타이틀 이미지 경로 (380x100) |
 | `description` | string | 미궁 설명 (최대 500자) |
 | `tags` | string[] | 태그 (최대 5개) |
-| `start_page` | string | 시작 페이지 이름 |
+| `start_page` | string | 시작 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
 | `allow_rating` | boolean | 별점 허용 |
 | `rating_threshold` | number | 별점 기준 (0=클리어 후, N=N페이지 후) |
 | `show_difficulty` | boolean | 난이도 표시 |
@@ -162,7 +162,7 @@ my-labyrinth/
     "answers": [
         {
             "answer": "정답",
-            "next": "다음-페이지-이름",
+            "next": "다음-페이지-경로",
             "public": false,
             "explanation": "정답 설명"
         }
@@ -187,7 +187,7 @@ my-labyrinth/
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | `answer` | string | 정답 텍스트 (필수) |
-| `next` | string | 연결 페이지 이름 |
+| `next` | string | 연결 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
 | `public` | boolean | 정답 공개 여부 |
 | `explanation` | string | 정답 설명 |
 

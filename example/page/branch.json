@@ -4,12 +4,12 @@
     "answers": [
         {
             "answer": "실패",
-            "next": "badend",
+            "next": "page/badend",
             "public": false
         },
         {
             "answer": "성공",
-            "next": "ending",
+            "next": "page/ending",
             "public": false
         }
     ],

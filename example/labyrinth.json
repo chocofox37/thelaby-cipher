@@ -3,7 +3,7 @@
     "image": "./image/title.jpg",
     "description": "thelaby-cipher 예시 미궁입니다.",
     "tags": ["puzzle", "short"],
-    "start_page": "start",
+    "start_page": "page/start",
     "allow_rating": true,
     "rating_threshold": 1,
     "show_difficulty": true,

@@ -4,7 +4,7 @@
     "answers": [
         {
             "answer": "다음",
-            "next": "branch",
+            "next": "page/branch",
             "public": false
         }
     ],

@@ -239,107 +239,103 @@ function loadAccount(contentPath) {
 /**
  * Find all page HTML files in content directory
  * @param {string} contentPath - Path to content directory
- * @returns {string[]} Array of page names (without .html extension)
+ * @returns {string[]} Array of page paths (relative to contentPath, without .html extension)
  */
 function findPageHtmlFiles(contentPath) {
     const results = [];
-    const pageDir = path.join(contentPath, 'page');
+    const excludeDirs = ['node_modules', 'lib', '.git', 'preview'];
 
-    if (!fs.existsSync(pageDir)) {
-        return results;
-    }
-
-    function scanDir(dir, baseDir) {
+    function scanDir(dir) {
         const items = fs.readdirSync(dir);
         for (const item of items) {
             const fullPath = path.join(dir, item);
             const stat = fs.statSync(fullPath);
 
             if (stat.isDirectory()) {
-                scanDir(fullPath, baseDir);
+                if (!excludeDirs.includes(item)) {
+                    scanDir(fullPath);
+                }
             } else if (item.endsWith('.html')) {
-                const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/').replace('.html', '');
+                const relativePath = path.relative(contentPath, fullPath).replace(/\\/g, '/').replace('.html', '');
                 results.push(relativePath);
             }
         }
     }
 
-    scanDir(pageDir, pageDir);
+    scanDir(contentPath);
     return results;
 }
 
 /**
  * Find all page JSON files in content directory
  * @param {string} contentPath - Path to content directory
- * @returns {string[]} Array of page names (without .json extension)
+ * @returns {string[]} Array of page paths (relative to contentPath, without .json extension)
  */
 function findPageJsonFiles(contentPath) {
     const results = [];
-    const pageDir = path.join(contentPath, 'page');
+    const excludeDirs = ['node_modules', 'lib', '.git', 'preview'];
+    const excludeFiles = ['labyrinth.json', 'account.json'];
 
-    if (!fs.existsSync(pageDir)) {
-        return results;
-    }
-
-    function scanDir(dir, baseDir) {
+    function scanDir(dir) {
         const items = fs.readdirSync(dir);
         for (const item of items) {
             const fullPath = path.join(dir, item);
             const stat = fs.statSync(fullPath);
 
             if (stat.isDirectory()) {
-                scanDir(fullPath, baseDir);
-            } else if (item.endsWith('.json') && !item.endsWith('.meta')) {
-                const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/').replace('.json', '');
+                if (!excludeDirs.includes(item)) {
+                    scanDir(fullPath);
+                }
+            } else if (item.endsWith('.json') && !item.endsWith('.meta') && !excludeFiles.includes(item)) {
+                const relativePath = path.relative(contentPath, fullPath).replace(/\\/g, '/').replace('.json', '');
                 results.push(relativePath);
             }
         }
     }
 
-    scanDir(pageDir, pageDir);
+    scanDir(contentPath);
     return results;
 }
 
 /**
  * Find all page meta files in content directory
  * @param {string} contentPath - Path to content directory
- * @returns {string[]} Array of page names (without .meta extension)
+ * @returns {string[]} Array of page paths (relative to contentPath, without .meta extension)
  */
 function findPageMetaFiles(contentPath) {
     const results = [];
-    const pageDir = path.join(contentPath, 'page');
+    const excludeDirs = ['node_modules', 'lib', '.git', 'preview'];
+    const excludeFiles = ['labyrinth.meta'];
 
-    if (!fs.existsSync(pageDir)) {
-        return results;
-    }
-
-    function scanDir(dir, baseDir) {
+    function scanDir(dir) {
         const items = fs.readdirSync(dir);
         for (const item of items) {
             const fullPath = path.join(dir, item);
             const stat = fs.statSync(fullPath);
 
             if (stat.isDirectory()) {
-                scanDir(fullPath, baseDir);
-            } else if (item.endsWith('.meta')) {
-                const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, '/').replace('.meta', '');
+                if (!excludeDirs.includes(item)) {
+                    scanDir(fullPath);
+                }
+            } else if (item.endsWith('.meta') && !excludeFiles.includes(item)) {
+                const relativePath = path.relative(contentPath, fullPath).replace(/\\/g, '/').replace('.meta', '');
                 results.push(relativePath);
             }
         }
     }
 
-    scanDir(pageDir, pageDir);
+    scanDir(contentPath);
     return results;
 }
 
 /**
  * Read page HTML content
  * @param {string} contentPath - Path to content directory
- * @param {string} pageName - Page name (without extension)
+ * @param {string} pagePath - Page path relative to contentPath (without extension)
  * @returns {string|null} HTML content or null
  */
-function readPageHtml(contentPath, pageName) {
-    const htmlPath = path.join(contentPath, 'page', `${pageName}.html`);
+function readPageHtml(contentPath, pagePath) {
+    const htmlPath = path.join(contentPath, `${pagePath}.html`);
     if (fs.existsSync(htmlPath)) {
         return fs.readFileSync(htmlPath, 'utf8');
     }
@@ -349,11 +345,11 @@ function readPageHtml(contentPath, pageName) {
 /**
  * Read page JSON metadata
  * @param {string} contentPath - Path to content directory
- * @param {string} pageName - Page name (without extension)
+ * @param {string} pagePath - Page path relative to contentPath (without extension)
  * @returns {object|null} Page JSON data or null
  */
-function readPageJson(contentPath, pageName) {
-    const jsonPath = path.join(contentPath, 'page', `${pageName}.json`);
+function readPageJson(contentPath, pagePath) {
+    const jsonPath = path.join(contentPath, `${pagePath}.json`);
     if (fs.existsSync(jsonPath)) {
         return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     }
@@ -363,11 +359,11 @@ function readPageJson(contentPath, pageName) {
 /**
  * Read page meta file
  * @param {string} contentPath - Path to content directory
- * @param {string} pageName - Page name
+ * @param {string} pagePath - Page path relative to contentPath (without extension)
  * @returns {object} Page meta or empty object
  */
-function readPageMeta(contentPath, pageName) {
-    const metaPath = path.join(contentPath, 'page', `${pageName}.meta`);
+function readPageMeta(contentPath, pagePath) {
+    const metaPath = path.join(contentPath, `${pagePath}.meta`);
     if (fs.existsSync(metaPath)) {
         return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
     }
@@ -377,11 +373,11 @@ function readPageMeta(contentPath, pageName) {
 /**
  * Write page meta file
  * @param {string} contentPath - Path to content directory
- * @param {string} pageName - Page name
+ * @param {string} pagePath - Page path relative to contentPath (without extension)
  * @param {object} meta - Meta data
  */
-function writePageMeta(contentPath, pageName, meta) {
-    const metaPath = path.join(contentPath, 'page', `${pageName}.meta`);
+function writePageMeta(contentPath, pagePath, meta) {
+    const metaPath = path.join(contentPath, `${pagePath}.meta`);
     const metaDir = path.dirname(metaPath);
     if (!fs.existsSync(metaDir)) {
         fs.mkdirSync(metaDir, { recursive: true });
@@ -392,10 +388,10 @@ function writePageMeta(contentPath, pageName, meta) {
 /**
  * Delete page meta file
  * @param {string} contentPath - Path to content directory
- * @param {string} pageName - Page name
+ * @param {string} pagePath - Page path relative to contentPath (without extension)
  */
-function deletePageMeta(contentPath, pageName) {
-    const metaPath = path.join(contentPath, 'page', `${pageName}.meta`);
+function deletePageMeta(contentPath, pagePath) {
+    const metaPath = path.join(contentPath, `${pagePath}.meta`);
     if (fs.existsSync(metaPath)) {
         fs.unlinkSync(metaPath);
     }
@@ -886,8 +882,8 @@ async function main() {
                 const meta = readPageMeta(contentPath, name);
                 if (html && json) {
                     // Calculate image checksums for change detection
-                    const pagePath = path.join(contentPath, 'page');
-                    const localImages = findLocalImages(html, pagePath);
+                    const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
+                    const localImages = findLocalImages(html, pageDir);
                     const imageChecksums = localImages.map(imgPath => calculateChecksum(imgPath));
                     pages[name] = { html, json, meta, hash: computePageHash(html, json, imageChecksums) };
                 }
@@ -1090,8 +1086,8 @@ async function main() {
                 );
 
                 // Find and upload images
-                const pagePath = path.join(contentPath, 'page');
-                const localImages = findLocalImages(html, pagePath);
+                const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
+                const localImages = findLocalImages(html, pageDir);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
@@ -1197,8 +1193,8 @@ async function main() {
                 );
 
                 // Find and upload images
-                const pagePath = path.join(contentPath, 'page');
-                const localImages = findLocalImages(html, pagePath);
+                const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
+                const localImages = findLocalImages(html, pageDir);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
