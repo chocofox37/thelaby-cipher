@@ -84,12 +84,14 @@ Credentials are stored separately from labyrinth config.
 {
     "title": "미궁명",
     "image": "./image/title.jpg",
-    "description": "설명",
+    "description": ["줄1", "줄2"],
     "tags": ["puzzle", "short"],
     "start_page": "시작-페이지-경로",
     ...
 }
 ```
+
+Note: `description`은 문자열 또는 문자열 배열 (줄바꿈으로 합쳐짐)
 
 Note: No email/password fields - these are in account.json.
 

@@ -108,7 +108,7 @@ my-labyrinth/
 {
     "title": "미궁 제목",
     "image": "./image/title.jpg",
-    "description": "미궁 설명",
+    "description": ["첫 번째 줄", "두 번째 줄"],
     "tags": ["puzzle", "short"],
     "start_page": "시작-페이지-경로",
     "allow_rating": true,
@@ -123,7 +123,7 @@ my-labyrinth/
 |------|------|------|
 | `title` | string | 미궁 제목 (필수) |
 | `image` | string | 타이틀 이미지 경로 (380x100) |
-| `description` | string | 미궁 설명 (최대 500자) |
+| `description` | string \| string[] | 미궁 설명 (최대 500자, 배열 시 줄바꿈으로 합침) |
 | `tags` | string[] | 태그 (최대 5개) |
 | `start_page` | string | 시작 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
 | `allow_rating` | boolean | 별점 허용 |

@@ -143,7 +143,14 @@ const FIELD_MAP = {
  * Normalize labyrinth config with defaults
  */
 function normalizeConfig(config) {
-    return { ...LABYRINTH_DEFAULTS, ...config };
+    const normalized = { ...LABYRINTH_DEFAULTS, ...config };
+
+    // Support array format for description (join with newlines)
+    if (Array.isArray(normalized.description)) {
+        normalized.description = normalized.description.join('\n');
+    }
+
+    return normalized;
 }
 
 /**
@@ -432,12 +439,12 @@ async function applyConfigToForm(page, config, options = {}) {
 
         switch (field.type) {
             case 'text':
-                // Clear field using triple-click to select all, then backspace
-                await page.click(field.selector, { clickCount: 3 });
-                await page.keyboard.press('Backspace');
-                if (value) {
-                    await page.type(field.selector, String(value));
-                }
+                // Set value directly and trigger input event
+                await page.$eval(field.selector, (el, val) => {
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }, value ? String(value) : '');
                 break;
 
             case 'checkbox':
