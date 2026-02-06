@@ -214,8 +214,11 @@ my-labyrinth/
 HTML 내 로컬 이미지 경로는 자동으로 업로드되고 URL로 교체됩니다.
 
 지원 패턴:
-- `src="./image/sample.jpg"` (img 태그)
+- `src="./image/sample.jpg"` (img 태그, 상대 경로)
+- `src="/image/sample.jpg"` (img 태그, 절대 경로 - 콘텐츠 루트 기준)
 - `url(./image/bg.jpg)` (CSS background-image 등)
+
+**오류 처리:** 이미지 파일을 찾을 수 없으면 경로 정보와 함께 에러 발생
 
 ```html
 <!-- 업로드 전 -->

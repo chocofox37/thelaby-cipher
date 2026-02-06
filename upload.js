@@ -510,8 +510,9 @@ function validateAllPages(pages) {
  * @param {string} contentPath - Content path for resolving relative paths
  * @returns {string[]} Array of absolute image paths
  */
-function findLocalImages(html, contentPath) {
+function findLocalImages(html, contentPath, rootPath = null) {
     const images = [];
+    const notFound = [];
     const imageExtensions = '(png|jpg|jpeg|gif|webp|bmp)';
 
     // Match src="..." attributes
@@ -520,22 +521,40 @@ function findLocalImages(html, contentPath) {
     const urlRegex = new RegExp(`url\\(["']?([^"')]+\\.${imageExtensions})["']?\\)`, 'gi');
 
     const patterns = [srcRegex, urlRegex];
+    const contentDir = fs.statSync(contentPath).isDirectory() ? contentPath : path.dirname(contentPath);
+    const rootDir = rootPath ? (fs.statSync(rootPath).isDirectory() ? rootPath : path.dirname(rootPath)) : contentDir;
 
     for (const regex of patterns) {
         let match;
         while ((match = regex.exec(html)) !== null) {
-            const src = match[1];
+            let src = match[1];
             // Skip if already a URL
             if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//') || src.startsWith('data:')) {
                 continue;
             }
-            // Resolve to absolute path (relative to content folder's directory)
-            const contentDir = fs.statSync(contentPath).isDirectory() ? contentPath : path.dirname(contentPath);
-            const absPath = path.resolve(contentDir, src);
+            // Handle web-style absolute paths (starting with /) as relative to rootDir
+            // Handle relative paths as relative to contentDir
+            let absPath;
+            if (src.startsWith('/')) {
+                absPath = path.resolve(rootDir, src.slice(1));
+            } else {
+                absPath = path.resolve(contentDir, src);
+            }
             if (fs.existsSync(absPath)) {
                 images.push(absPath);
+            } else {
+                notFound.push({ src: match[1], resolved: absPath });
             }
         }
+    }
+
+    if (notFound.length > 0) {
+        log.error(`이미지 파일을 찾을 수 없습니다:`);
+        for (const { src, resolved } of notFound) {
+            log.error(`  - ${src}`);
+            log.error(`    (resolved: ${resolved})`);
+        }
+        throw new Error(`${notFound.length}개의 이미지 파일을 찾을 수 없습니다.`);
     }
 
     return [...new Set(images)]; // Remove duplicates
@@ -883,7 +902,7 @@ async function main() {
                 if (html && json) {
                     // Calculate image checksums for change detection
                     const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
-                    const localImages = findLocalImages(html, pageDir);
+                    const localImages = findLocalImages(html, pageDir, contentPath);
                     const imageChecksums = localImages.map(imgPath => calculateChecksum(imgPath));
                     pages[name] = { html, json, meta, hash: computePageHash(html, json, imageChecksums) };
                 }
@@ -1087,7 +1106,7 @@ async function main() {
 
                 // Find and upload images
                 const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
-                const localImages = findLocalImages(html, pageDir);
+                const localImages = findLocalImages(html, pageDir, contentPath);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
@@ -1194,7 +1213,7 @@ async function main() {
 
                 // Find and upload images
                 const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
-                const localImages = findLocalImages(html, pageDir);
+                const localImages = findLocalImages(html, pageDir, contentPath);
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);

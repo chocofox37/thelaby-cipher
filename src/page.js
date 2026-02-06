@@ -449,6 +449,18 @@ async function clearAnswers(page) {
  * @returns {Promise<string|null>} New page ID if created, or null
  */
 async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
+    // Handle beforeunload dialog (browser's "Leave site?" confirmation)
+    const dialogHandler = async (dialog) => {
+        log.verbose(`    브라우저 대화상자: ${dialog.type()} - ${dialog.message()}`);
+        try {
+            await dialog.accept();
+        } catch (e) {
+            // Dialog already handled by another handler, ignore
+        }
+    };
+    page.removeAllListeners('dialog');
+    page.on('dialog', dialogHandler);
+
     // Sync editor content to form
     await page.evaluate(() => {
         if (typeof oEditors !== 'undefined' && oEditors.getById) {
@@ -476,20 +488,36 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     await saveBtn.click();
 
     // Wait for popup and click OK
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 300));
+    log.verbose(`    팝업 대기 완료, 확인 버튼 찾는 중...`);
 
-    // Click the OK button
+    // Click the OK button (confirmation popup)
     try {
-        await page.click('#labyPopupOk');
-        log.verbose(`    확인 팝업 클릭`);
-    } catch (e) {}
+        const confirmBtn = await page.$('#labyPopupOk');
+        log.verbose(`    확인 버튼 검색 결과: ${confirmBtn ? '발견' : '없음'}`);
+        if (confirmBtn) {
+            await confirmBtn.click();
+            log.verbose(`    확인 팝업 클릭 완료`);
+        }
+    } catch (e) {
+        log.verbose(`    확인 팝업 클릭 오류: ${e.message}`);
+    }
 
     // Wait for possible second popup (success) and click OK
-    await new Promise(r => setTimeout(r, 100));
+    log.verbose(`    두 번째 팝업 대기 중...`);
+    await new Promise(r => setTimeout(r, 500));
+    log.verbose(`    두 번째 팝업 대기 완료`);
     try {
-        await page.click('#labyPopupOk');
-        log.verbose(`    완료 팝업 클릭`);
-    } catch (e) {}
+        const okBtn = await page.$('#labyPopupOk');
+        log.verbose(`    완료 버튼 검색 결과: ${okBtn ? '발견' : '없음'}`);
+        if (okBtn) {
+            await okBtn.click();
+            log.verbose(`    완료 팝업 클릭`);
+        }
+    } catch (e) {
+        log.verbose(`    완료 팝업 클릭 오류: ${e.message}`);
+    }
+    log.verbose(`    팝업 처리 완료`);
 
     // Wait for navigation
     await new Promise(r => setTimeout(r, 100));

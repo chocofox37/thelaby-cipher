@@ -183,6 +183,8 @@ Direct HTML content that goes into the SmartEditor2.
 - Supports `src="..."` (img tags) and `url(...)` (CSS background-image)
 - Checksum-based deduplication (skip if already uploaded)
 - URLs replaced in HTML before setting content
+- Absolute paths (`/image/foo.jpg`) resolved from content root
+- Missing images cause error with detailed path info
 
 ## Dependencies
 
