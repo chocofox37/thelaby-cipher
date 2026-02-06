@@ -92,7 +92,8 @@ async function waitForEditor(page, timeout = 20000) {
 }
 
 /**
- * Set SmartEditor2 content using the editor API
+ * Set SmartEditor2 content using HTML mode
+ * Must click HTML button and set content in source textarea (no fallback to setIR)
  * @param {object} page - Puppeteer page
  * @param {string} html - HTML content to set
  */
@@ -104,33 +105,67 @@ async function setEditorContent(page, html) {
         return false;
     }
 
-    const result = await page.evaluate((content) => {
-        const editor = oEditors.getById['quest'];
+    // Check all frames for the HTML button (SmartEditor may be in an iframe)
+    const frames = page.frames();
+    let targetFrame = null;
 
-        // Set content using setIR (set Internal Representation)
-        editor.setIR(content);
+    for (const frame of frames) {
+        try {
+            const hasBtn = await frame.evaluate(() => !!document.querySelector('.se2_to_html'));
+            if (hasBtn) {
+                targetFrame = frame;
+                break;
+            }
+        } catch (e) {
+            // Frame might not be accessible, skip
+        }
+    }
 
-        // Sync to textarea
-        editor.exec('UPDATE_CONTENTS_FIELD', []);
-
-        // Small delay for sync
-        return new Promise(resolve => {
-            setTimeout(() => {
-                const textareaVal = document.querySelector('#quest')?.value || '';
-                resolve({
-                    success: true,
-                    length: textareaVal.length,
-                    preview: textareaVal.substring(0, 100)
-                });
-            }, 100);
-        });
-    }, html);
-
-    if (!result.success) {
-        log.fail('에디터 콘텐츠 설정 실패');
+    if (!targetFrame) {
+        log.fail('HTML 버튼을 찾을 수 없습니다 (모든 프레임 검색 완료)');
         return false;
     }
 
+    // Click HTML button to switch to HTML mode
+    await targetFrame.click('.se2_to_html');
+    log.verbose(`    HTML 모드로 전환`);
+
+    // Wait for source textarea to appear in the frame
+    try {
+        await targetFrame.waitForSelector('.se2_input_syntax', { visible: true, timeout: 5000 });
+    } catch (e) {
+        log.fail('소스 textarea가 나타나지 않습니다 (타임아웃)');
+        return false;
+    }
+
+    await new Promise(r => setTimeout(r, 200)); // Small delay for stability
+
+    // Set content in source textarea (iframe)
+    const result = await targetFrame.evaluate((content) => {
+        const sourceTextarea = document.querySelector('.se2_input_syntax');
+        if (!sourceTextarea) {
+            return { success: false, error: 'source textarea not found' };
+        }
+
+        sourceTextarea.value = content;
+        sourceTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+        return { success: true };
+    }, html);
+
+    if (!result.success) {
+        log.fail(`소스 textarea 설정 실패: ${result.error}`);
+        return false;
+    }
+
+    // Also set the main page's form textarea directly to ensure sync
+    await page.evaluate((content) => {
+        const formTextarea = document.querySelector('#quest');
+        if (formTextarea) {
+            formTextarea.value = content;
+        }
+    }, html);
+
+    log.verbose(`    에디터 콘텐츠 설정됨 (HTML 모드)`);
     return true;
 }
 
@@ -461,15 +496,8 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     page.removeAllListeners('dialog');
     page.on('dialog', dialogHandler);
 
-    // Sync editor content to form
-    await page.evaluate(() => {
-        if (typeof oEditors !== 'undefined' && oEditors.getById) {
-            const editor = oEditors.getById['quest'];
-            if (editor && editor.exec) {
-                editor.exec('UPDATE_CONTENTS_FIELD', []);
-            }
-        }
-    });
+    // Don't call UPDATE_CONTENTS_FIELD - it may corrupt HTML mode content
+    // The form textarea should already be synced from the HTML source textarea
     await new Promise(r => setTimeout(r, 100));
 
     // Find save button - different for create vs edit
@@ -728,6 +756,17 @@ async function getParentConnections(page) {
  */
 async function deletePage(page, labyrinthId, pageId) {
     log.verbose(`    페이지 삭제 중: ${pageId}`);
+
+    // Handle beforeunload dialog
+    const dialogHandler = async (dialog) => {
+        try {
+            await dialog.accept();
+        } catch (e) {
+            // Dialog already handled
+        }
+    };
+    page.removeAllListeners('dialog');
+    page.on('dialog', dialogHandler);
 
     // Navigate to the page edit screen
     await navigateToEditPage(page, labyrinthId, pageId);

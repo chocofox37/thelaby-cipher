@@ -167,9 +167,11 @@ Direct HTML content that goes into the SmartEditor2.
 
 ### SmartEditor2 Integration
 
-- Content set via `oEditors.getById['quest'].setIR(html)`
+- SmartEditor2 is inside an iframe
+- Content set via HTML mode: click `.se2_to_html` button, then set `.se2_input_syntax` textarea
+- Also set main page `#quest` textarea directly for form submission
+- Do NOT use `setIR()` or `UPDATE_CONTENTS_FIELD` (causes content corruption via WYSIWYG rendering)
 - Images uploaded via photo uploader popup
-- Must call `UPDATE_CONTENTS_FIELD` before form submit
 
 ### Parent Connection System
 

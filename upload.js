@@ -194,7 +194,8 @@ const {
     getPageList,
     setParentConnection,
     clearParentConnections,
-    deletePage
+    deletePage,
+    setEditorContent
 } = require('./src/page');
 const {
     calculateChecksum,
@@ -1160,6 +1161,9 @@ async function main() {
                         pageIds.push(pageId);
                     }
 
+                    // Save final HTML with replaced image URLs for later use
+                    pages[name].finalHtml = html;
+
                     counts.created++;
                     log.verbose(`    생성됨 (ID: ${pageId})`);
                 } else {
@@ -1270,6 +1274,9 @@ async function main() {
                 pageMeta.is_ending = isEnding;
                 writePageMeta(contentPath, name, pageMeta);
 
+                // Save final HTML with replaced image URLs for later use
+                pages[name].finalHtml = html;
+
                 counts.updated++;
                 log.verbose(`    수정됨`);
             }
@@ -1344,6 +1351,14 @@ async function main() {
                         connectionSuccess = false;
                         counts.failures.connect++;
                     }
+                }
+
+                // Re-set HTML content to overwrite any changes made by SmartEditor
+                // (SmartEditor executes JS when the edit page is opened, which can bake
+                // inline styles from onload handlers into the HTML)
+                const finalHtml = pages[targetName]?.finalHtml;
+                if (finalHtml) {
+                    await setEditorContent(page, finalHtml);
                 }
 
                 await withRetry(
