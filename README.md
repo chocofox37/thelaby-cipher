@@ -112,7 +112,7 @@ my-labyrinth/
     "tags": ["puzzle", "short"],
     "start_page": "시작-페이지-경로",
     "allow_rating": true,
-    "show_difficulty": true,
+    "allow_difficulty": true,
     "clear_visibility": "full"
 }
 ```
@@ -128,7 +128,7 @@ my-labyrinth/
 | `start_page` | string | 시작 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
 | `allow_rating` | boolean | 별점 허용 |
 | `rating_threshold` | number | 별점 기준 (0=클리어 후, N=N페이지 후) |
-| `show_difficulty` | boolean | 난이도 표시 |
+| `allow_difficulty` | boolean | 난이도 표시 |
 | `show_page_count` | boolean | 전체 페이지 수 공개 |
 | `show_ending_count` | boolean | 엔딩 수 공개 |
 | `show_badend_count` | boolean | 배드엔딩 수 공개 |

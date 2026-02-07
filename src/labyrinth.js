@@ -26,7 +26,7 @@ const LABYRINTH_DEFAULTS = {
     is_event: false,             // Event labyrinth
     allow_rating: true,          // Allow rating
     rating_threshold: 1,         // Rating threshold: 0/'clear' = after clear, N = after N pages
-    show_difficulty: true,       // Show difficulty
+    allow_difficulty: true,       // Show difficulty
     show_page_count: false,      // Show total page count
     show_ending_count: false,    // Show ending count
     show_badend_count: false,    // Show bad ending count
@@ -124,7 +124,7 @@ const FIELD_MAP = {
     description: { selector: '#labyrinthDc', type: 'text' },
 
     // Checkboxes
-    show_difficulty: { selector: 'input[name="levelYsno"]', type: 'checkbox' },
+    allow_difficulty: { selector: 'input[name="levelYsno"]', type: 'checkbox' },
     show_page_count: { selector: 'input[name="questCntOpen"]', type: 'checkbox' },
     show_ending_count: { selector: 'input[name="endCntOpen"]', type: 'checkbox' },
     show_badend_count: { selector: 'input[name="badendCntOpen"]', type: 'checkbox' },

@@ -6,7 +6,7 @@
     "start_page": "page/start",
     "allow_rating": true,
     "rating_threshold": 1,
-    "show_difficulty": true,
+    "allow_difficulty": true,
     "show_page_count": false,
     "show_ending_count": false,
     "show_badend_count": false,
