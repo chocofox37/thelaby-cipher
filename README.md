@@ -188,8 +188,8 @@ my-labyrinth/
 |------|------|------|
 | `answer` | string | 정답 텍스트 (필수) |
 | `next` | string | 연결 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
-| `public` | boolean | 정답 공개 여부 |
-| `explanation` | string | 정답 설명 |
+| `public` | boolean | 정답 공개 여부 (미구현) |
+| `explanation` | string | 정답 설명 (미구현) |
 
 ## 업로드 프로세스
 

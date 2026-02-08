@@ -374,32 +374,10 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
         return { rowIndex };
     });
 
-    // Handle answerOpen (public) and explanation
-    if (rowInfo && rowInfo.rowIndex !== null) {
-        // Public checkbox and explanation are in the row immediately after the answer row
-        const nextRowIndex = rowInfo.rowIndex + 2; // +2 because nth-child is 1-indexed and we want next row
-
-        // Public checkbox
-        const publicCheckboxSelector = `table tr:nth-child(${nextRowIndex}) input.answerOpen`;
-        const publicCheckbox = await page.$(publicCheckboxSelector);
-        if (publicCheckbox) {
-            const currentlyChecked = await publicCheckbox.evaluate(el => el.checked);
-            if (currentlyChecked !== isPublic) {
-                await publicCheckbox.click();
-            }
-        }
-
-        // Explanation textarea
-        if (explanation) {
-            const explainSelector = `table tr:nth-child(${nextRowIndex}) textarea.answerExplain`;
-            const explainTextarea = await page.$(explainSelector);
-            if (explainTextarea) {
-                await explainTextarea.click({ clickCount: 3 });
-                await page.keyboard.press('Backspace');
-                await explainTextarea.type(explanation);
-            }
-        }
-    }
+    // NOTE: isPublic and explanation are intentionally disabled
+    // TODO: Implement later with the solution typing feature
+    // - isPublic: 정답 공개 여부 checkbox
+    // - explanation: 해설 textarea
 
     log.verbose(`    정답 입력됨`);
     return 'filled';
