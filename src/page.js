@@ -244,25 +244,31 @@ async function fillPageForm(page, data) {
         await new Promise(r => setTimeout(r, 100));
     }
 
-    // Hint - check and type
-    if (data.hint) {
-        // Check the hint checkbox
-        const hintCheckSelector = '#hintcheck, input[name="hintcheck"]';
-        const hintCheckEl = await page.$(hintCheckSelector);
-        if (hintCheckEl) {
-            const hintChecked = await hintCheckEl.evaluate(el => el.checked);
-            if (!hintChecked) {
-                await hintCheckEl.click();
-            }
-        }
+    // Hint - { text, enabled }
+    const hint = data.hint || {};
+    const hintText = hint.text || '';
+    const hintEnabled = hint.enabled === true;
 
-        // Fill hint text
+    // Fill hint text
+    if (hintText) {
         const hintInputSelector = '#hint, input[name="hint"]';
         const hintInputEl = await page.$(hintInputSelector);
         if (hintInputEl) {
             await page.click(hintInputSelector, { clickCount: 3 });
             await page.keyboard.press('Backspace');
-            await page.type(hintInputSelector, data.hint);
+            await page.type(hintInputSelector, hintText);
+        }
+    }
+
+    // Set hint checkbox
+    const hintCheckSelector = '#hintcheck, input[name="hintcheck"]';
+    const hintCheckEl = await page.$(hintCheckSelector);
+    if (hintCheckEl) {
+        const hintChecked = await hintCheckEl.evaluate(el => el.checked);
+        if (hintEnabled && !hintChecked) {
+            await hintCheckEl.click();
+        } else if (!hintEnabled && hintChecked) {
+            await hintCheckEl.click();
         }
     }
 
@@ -365,19 +371,64 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
         return 'no empty slot';
     }
 
-    // Get the row information for finding related elements
-    const rowInfo = await answerInputEl.evaluate(el => {
-        const tr = el.closest('tr');
-        if (!tr) return null;
-        const allRows = Array.from(tr.parentElement.children);
-        const rowIndex = allRows.indexOf(tr);
-        return { rowIndex };
+    // Get the row element for finding related elements
+    const answerRow = await answerInputEl.evaluateHandle(el => el.closest('tr'));
+
+    // Handle isPublic checkbox (정답 공개 여부)
+    // Note: The checkbox is in the NEXT row after the answer input row
+    const answerOpenRow = await answerInputEl.evaluateHandle(el => {
+        const answerTr = el.closest('tr');
+        return answerTr ? answerTr.nextElementSibling : null;
     });
 
-    // NOTE: isPublic and explanation are intentionally disabled
-    // TODO: Implement later with the solution typing feature
-    // - isPublic: 정답 공개 여부 checkbox
-    // - explanation: 해설 textarea
+    if (isPublic && answerOpenRow) {
+        try {
+            // Find the "정답 공개 여부" checkbox (input.answerOpen)
+            const publicCheckbox = await answerOpenRow.$('input.answerOpen');
+            if (publicCheckbox) {
+                const isChecked = await publicCheckbox.evaluate(el => el.checked);
+                if (!isChecked) {
+                    await publicCheckbox.click();
+                    log.verbose(`    정답 공개 체크됨`);
+                }
+            } else {
+                log.verbose(`    공개 체크박스를 찾을 수 없음`);
+            }
+        } catch (e) {
+            log.verbose(`    공개 체크박스 처리 오류: ${e.message}`);
+        }
+    }
+
+    // Handle explanation textarea (해설)
+    // Note: The textarea is in the same row as the answerOpen checkbox
+    if (explanation && explanation.trim() !== '' && answerOpenRow) {
+        try {
+            // Find the explanation textarea (textarea.answerExplain)
+            const explanationTextarea = await answerOpenRow.$('textarea.answerExplain');
+            if (explanationTextarea) {
+                // First check/click answerOpen checkbox to enable textarea
+                const publicCheckbox = await answerOpenRow.$('input.answerOpen');
+                if (publicCheckbox) {
+                    const isChecked = await publicCheckbox.evaluate(el => el.checked);
+                    if (!isChecked) {
+                        await publicCheckbox.click();
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                }
+
+                // Clear existing content and set new value directly
+                await explanationTextarea.evaluate((el, content) => {
+                    el.value = content;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }, explanation);
+                log.verbose(`    해설 입력됨`);
+            } else {
+                log.verbose(`    해설 textarea를 찾을 수 없음`);
+            }
+        } catch (e) {
+            log.verbose(`    해설 textarea 처리 오류: ${e.message}`);
+        }
+    }
 
     log.verbose(`    정답 입력됨`);
     return 'filled';

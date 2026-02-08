@@ -904,7 +904,21 @@ async function main() {
                     // Calculate image checksums for change detection
                     const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
                     const localImages = findLocalImages(html, pageDir, contentPath);
-                    const imageChecksums = localImages.map(imgPath => calculateChecksum(imgPath));
+
+                    // Also include explanation images in checksums
+                    const answers = json.answers || [];
+                    for (const ans of answers) {
+                        if (ans.explanation && ans.explanation.includes('<')) {
+                            try {
+                                const explImages = findLocalImages(ans.explanation, pageDir, contentPath);
+                                localImages.push(...explImages);
+                            } catch (e) {
+                                // Ignore errors in explanation image detection for hash calculation
+                            }
+                        }
+                    }
+
+                    const imageChecksums = [...new Set(localImages)].map(imgPath => calculateChecksum(imgPath));
                     pages[name] = { html, json, meta, hash: computePageHash(html, json, imageChecksums) };
                 }
                 metas[name] = meta;
@@ -1105,9 +1119,27 @@ async function main() {
                     '페이지 생성 화면 이동'
                 );
 
-                // Find and upload images
+                // Find and upload images (content + explanation images BEFORE fillPageForm)
                 const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
                 const localImages = findLocalImages(html, pageDir, contentPath);
+
+                const isFirst = (firstPage === name);
+                const isEnding = pageData.is_ending || false;
+                const answers = pageData.answers || [];
+                const hasAnswers = answers.length > 0;
+
+                // Prepare explanation HTML with images (collect all images first)
+                const processedAnswers = [];
+                for (const ans of answers) {
+                    let explanationHtml = ans.explanation || '';
+                    if (explanationHtml && explanationHtml.includes('<')) {
+                        const explImages = findLocalImages(explanationHtml, pageDir, contentPath);
+                        localImages.push(...explImages);
+                    }
+                    processedAnswers.push({ ...ans, explanationHtml });
+                }
+
+                // Upload all images at once (before editor content is set)
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
@@ -1117,12 +1149,14 @@ async function main() {
                     fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
 
                     html = replaceLocalImages(html, pathMap);
-                }
 
-                const isFirst = (firstPage === name);
-                const isEnding = pageData.is_ending || false;
-                const answers = pageData.answers || [];
-                const hasAnswers = answers.length > 0;
+                    // Replace images in explanation HTML too
+                    for (const ans of processedAnswers) {
+                        if (ans.explanationHtml) {
+                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap);
+                        }
+                    }
+                }
 
                 await fillPageForm(page, {
                     title: pageData.title,
@@ -1131,13 +1165,14 @@ async function main() {
                     isEnding: isEnding,
                     hasAnswers: hasAnswers,
                     hint: pageData.hint || '',
+                    hint_enabled: pageData.hint_enabled || false,
                     content: html
                 });
 
-                // Add answers (or dummy if none but required)
-                if (answers.length > 0) {
-                    for (const ans of answers) {
-                        await addAnswer(page, ans.answer, ans.public || false, ans.explanation || '');
+                // Add answers (images already processed)
+                if (processedAnswers.length > 0) {
+                    for (const ans of processedAnswers) {
+                        await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
                         log.verbose(`    정답: "${ans.answer}"`);
                     }
                 } else if (hasAnswers) {
@@ -1215,9 +1250,27 @@ async function main() {
                     '페이지 편집 화면 이동'
                 );
 
-                // Find and upload images
+                // Find and upload images (content + explanation images BEFORE fillPageForm)
                 const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
                 const localImages = findLocalImages(html, pageDir, contentPath);
+
+                const isFirst = (firstPage === name);
+                const isEnding = pageData.is_ending || false;
+                const answers = pageData.answers || [];
+                const hasAnswers = answers.length > 0;
+
+                // Prepare explanation HTML with images (collect all images first)
+                const processedAnswers = [];
+                for (const ans of answers) {
+                    let explanationHtml = ans.explanation || '';
+                    if (explanationHtml && explanationHtml.includes('<')) {
+                        const explImages = findLocalImages(explanationHtml, pageDir, contentPath);
+                        localImages.push(...explImages);
+                    }
+                    processedAnswers.push({ ...ans, explanationHtml });
+                }
+
+                // Upload all images at once (before editor content is set)
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
                     const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
@@ -1227,6 +1280,13 @@ async function main() {
                     fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
 
                     html = replaceLocalImages(html, pathMap);
+
+                    // Replace images in explanation HTML too
+                    for (const ans of processedAnswers) {
+                        if (ans.explanationHtml) {
+                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap);
+                        }
+                    }
                 }
 
                 // Navigate again only if images were uploaded (upload popup changes page state)
@@ -1237,12 +1297,6 @@ async function main() {
                     );
                 }
 
-                // Fill form with full data
-                const isFirst = (firstPage === name);
-                const isEnding = pageData.is_ending || false;
-                const answers = pageData.answers || [];
-                const hasAnswers = answers.length > 0;
-
                 await fillPageForm(page, {
                     title: pageData.title,
                     bgColor: pageData.background_color || '#000000',
@@ -1250,15 +1304,16 @@ async function main() {
                     isEnding: isEnding,
                     hasAnswers: hasAnswers,
                     hint: pageData.hint || '',
+                    hint_enabled: pageData.hint_enabled || false,
                     content: html
                 });
 
-                // Clear and re-add answers
+                // Clear and re-add answers (images already processed)
                 if (hasAnswers) {
                     await clearAnswers(page);
 
-                    for (const ans of answers) {
-                        await addAnswer(page, ans.answer, ans.public || false, ans.explanation || '');
+                    for (const ans of processedAnswers) {
+                        await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
                         log.verbose(`    정답: "${ans.answer}"`);
                     }
                 }

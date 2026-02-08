@@ -164,11 +164,14 @@ my-labyrinth/
             "answer": "정답",
             "next": "다음-페이지-경로",
             "public": false,
-            "explanation": "정답 설명"
+            "explanation": "<p>정답 해설 HTML</p>"
         }
     ],
     "is_ending": false,
-    "hint": "힌트 텍스트"
+    "hint": {
+        "text": "힌트 텍스트",
+        "enabled": true
+    }
 }
 ```
 
@@ -180,7 +183,14 @@ my-labyrinth/
 | `background_color` | string | 배경색 (#RRGGBB) |
 | `answers` | array | 정답 목록 |
 | `is_ending` | boolean | 엔딩 페이지 여부 |
-| `hint` | string | 힌트 |
+| `hint` | object | 힌트 설정 |
+
+**힌트 객체:**
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `text` | string | 힌트 텍스트 |
+| `enabled` | boolean | 힌트 활성화 여부 |
 
 **정답 객체:**
 
@@ -188,8 +198,8 @@ my-labyrinth/
 |------|------|------|
 | `answer` | string | 정답 텍스트 (필수) |
 | `next` | string | 연결 페이지 경로 (labyrinth.json 기준, 확장자 제외) |
-| `public` | boolean | 정답 공개 여부 (미구현) |
-| `explanation` | string | 정답 설명 (미구현) |
+| `public` | boolean | 정답 공개 여부 |
+| `explanation` | string | 정답 해설 (HTML, 로컬 이미지 자동 업로드) |
 
 ## 업로드 프로세스
 

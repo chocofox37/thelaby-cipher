@@ -123,9 +123,10 @@ Direct HTML content that goes into the SmartEditor2.
     "title": "페이지 제목",
     "background_color": "#000000",
     "answers": [
-        { "answer": "정답", "next": "다음-페이지-경로", "public": false }
+        { "answer": "정답", "next": "다음-페이지-경로", "public": false, "explanation": "<p>해설</p>" }
     ],
-    "is_ending": false
+    "is_ending": false,
+    "hint": { "text": "힌트 텍스트", "enabled": true }
 }
 ```
 
