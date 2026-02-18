@@ -249,7 +249,21 @@ async function fillPageForm(page, data) {
     const hintText = hint.text || '';
     const hintEnabled = hint.enabled === true;
 
-    // Fill hint text
+    // Set hint checkbox first (input may be hidden when unchecked)
+    const hintCheckSelector = '#hintcheck, input[name="hintcheck"]';
+    const hintCheckEl = await page.$(hintCheckSelector);
+    if (hintCheckEl) {
+        const hintChecked = await hintCheckEl.evaluate(el => el.checked);
+        if (hintEnabled && !hintChecked) {
+            await hintCheckEl.click();
+            await new Promise(r => setTimeout(r, 100));
+        } else if (!hintEnabled && hintChecked) {
+            await hintCheckEl.click();
+            await new Promise(r => setTimeout(r, 100));
+        }
+    }
+
+    // Fill hint text (after checkbox enables the input)
     if (hintText) {
         const hintInputSelector = '#hint, input[name="hint"]';
         const hintInputEl = await page.$(hintInputSelector);
@@ -257,18 +271,6 @@ async function fillPageForm(page, data) {
             await page.click(hintInputSelector, { clickCount: 3 });
             await page.keyboard.press('Backspace');
             await page.type(hintInputSelector, hintText);
-        }
-    }
-
-    // Set hint checkbox
-    const hintCheckSelector = '#hintcheck, input[name="hintcheck"]';
-    const hintCheckEl = await page.$(hintCheckSelector);
-    if (hintCheckEl) {
-        const hintChecked = await hintCheckEl.evaluate(el => el.checked);
-        if (hintEnabled && !hintChecked) {
-            await hintCheckEl.click();
-        } else if (!hintEnabled && hintChecked) {
-            await hintCheckEl.click();
         }
     }
 

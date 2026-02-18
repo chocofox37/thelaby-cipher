@@ -631,6 +631,33 @@ function replaceLocalImages(html, pathMap) {
 }
 
 /**
+ * Replace page paths with page IDs in ONLY-VIEW comments
+ * e.g. <!-- ONLY-VIEW-START IN=[page/start] --> → <!-- ONLY-VIEW-START IN=[12345] -->
+ * @param {string} html - Page HTML content
+ * @param {object} pageIdMap - Map of page name → page ID
+ * @returns {string} - HTML with paths replaced by IDs
+ */
+function replaceVisitPaths(html, pageIdMap) {
+    // Match <!-- ONLY-VIEW-START ... --> comments
+    return html.replace(/<!--\s*ONLY-VIEW-START\s+(.*?)\s*-->/g, (match, conditions) => {
+        // Replace paths inside each condition bracket: IN=[...], INOR=[...], EX=[...], EXOR=[...]
+        const replaced = conditions.replace(/((?:IN|INOR|EX|EXOR)=)\[([^\]]*)\]/g, (m, prefix, values) => {
+            const ids = values.split(',').map(v => {
+                const trimmed = v.trim();
+                const id = pageIdMap[trimmed];
+                if (id) return id;
+                // Already a number or no mapping found
+                if (/^\d+$/.test(trimmed)) return trimmed;
+                log.error(`    visit 경로를 찾을 수 없습니다: "${trimmed}"`);
+                return trimmed;
+            });
+            return `${prefix}[${ids.join(',')}]`;
+        });
+        return `<!-- ONLY-VIEW-START ${replaced} -->`;
+    });
+}
+
+/**
  * Escape special regex characters
  */
 function escapeRegex(str) {
@@ -1097,7 +1124,7 @@ async function main() {
         }
 
         // ============================================================
-        // Step 4: Create new pages
+        // Step 4: Create new pages (dummy content for ID allocation)
         // ============================================================
         log.info('');
         log.section(4, 6, '페이지 생성');
@@ -1107,78 +1134,24 @@ async function main() {
                 const pageData = pages[name].json;
                 log.progress(i + 1, newPages.length, `${name}: ${pageData.title}`);
 
-                // Read HTML content
-                let html = pages[name].html;
-                if (!html) {
-                    log.error(`    HTML 내용이 없습니다`);
-                    continue;
-                }
-
                 await withRetry(
                     () => navigateToCreatePage(page, labyrinthId),
                     '페이지 생성 화면 이동'
                 );
 
-                // Find and upload images (content + explanation images BEFORE fillPageForm)
-                const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
-                const localImages = findLocalImages(html, pageDir, contentPath);
-
-                const isFirst = (firstPage === name);
-                const isEnding = pageData.is_ending || false;
-                const answers = pageData.answers || [];
-                const hasAnswers = answers.length > 0;
-
-                // Prepare explanation HTML with images (collect all images first)
-                const processedAnswers = [];
-                for (const ans of answers) {
-                    let explanationHtml = ans.explanation || '';
-                    if (explanationHtml && explanationHtml.includes('<')) {
-                        const explImages = findLocalImages(explanationHtml, pageDir, contentPath);
-                        localImages.push(...explImages);
-                    }
-                    processedAnswers.push({ ...ans, explanationHtml });
-                }
-
-                // Upload all images at once (before editor content is set)
-                if (localImages.length > 0) {
-                    log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
-                    const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
-                    imageCache = newCache;
-
-                    labyMeta.images = imageCache;
-                    fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-
-                    html = replaceLocalImages(html, pathMap);
-
-                    // Replace images in explanation HTML too
-                    for (const ans of processedAnswers) {
-                        if (ans.explanationHtml) {
-                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap);
-                        }
-                    }
-                }
-
                 await fillPageForm(page, {
                     title: pageData.title,
-                    bgColor: pageData.background_color || '#000000',
-                    isFirst: isFirst,
-                    isEnding: isEnding,
-                    hasAnswers: hasAnswers,
-                    hint: pageData.hint || '',
-                    hint_enabled: pageData.hint_enabled || false,
-                    content: html
+                    bgColor: '#000000',
+                    isFirst: false,
+                    isEnding: false,
+                    hasAnswers: true,
+                    hint: '',
+                    hint_enabled: false,
+                    content: '.'
                 });
 
-                // Add answers (images already processed)
-                if (processedAnswers.length > 0) {
-                    for (const ans of processedAnswers) {
-                        await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
-                        log.verbose(`    정답: "${ans.answer}"`);
-                    }
-                } else if (hasAnswers) {
-                    // Site requires at least one answer for non-ending pages
-                    await addAnswer(page, 'temp', false, '');
-                }
+                // Always add 1 dummy answer for ID allocation
+                await addAnswer(page, '.', false, '');
 
                 const pageId = await withRetry(
                     () => submitPageForm(page, labyrinthId, pageData.title),
@@ -1187,17 +1160,11 @@ async function main() {
 
                 if (pageId) {
                     pages[name].meta.id = pageId;
-                    pages[name].meta.hash = pages[name].hash;
-                    pages[name].meta.is_first = isFirst;
-                    pages[name].meta.is_ending = isEnding;
                     writePageMeta(contentPath, name, pages[name].meta);
 
                     if (!pageIds.includes(pageId)) {
                         pageIds.push(pageId);
                     }
-
-                    // Save final HTML with replaced image URLs for later use
-                    pages[name].finalHtml = html;
 
                     counts.created++;
                     log.verbose(`    생성됨 (ID: ${pageId})`);
@@ -1214,7 +1181,7 @@ async function main() {
             log.item('생성할 페이지 없음');
         }
 
-        // Build page name -> ID mapping
+        // Build page name -> ID mapping (all IDs now available)
         const pageIdMap = {};
         for (const [name, pageInfo] of Object.entries(pages)) {
             if (pageInfo.meta.id) {
@@ -1222,20 +1189,25 @@ async function main() {
             }
         }
 
-        // Update modified pages
+        // Update pages: newly created (with real content) + modified
+        const pagesToUpdate = [
+            ...newPages.filter(name => pages[name].meta.id),
+            ...updatedPages
+        ];
+
         log.info('');
         log.section(5, 6, '페이지 수정');
-        if (updatedPages.length > 0) {
+        if (pagesToUpdate.length > 0) {
 
-            for (let i = 0; i < updatedPages.length; i++) {
-                const name = updatedPages[i];
+            for (let i = 0; i < pagesToUpdate.length; i++) {
+                const name = pagesToUpdate[i];
                 const pageData = pages[name].json;
                 const pageMeta = pages[name].meta;
                 const pageId = pageMeta.id;
 
                 if (!pageId) continue;
 
-                log.progress(i + 1, updatedPages.length, `${name}: ${pageData.title}`);
+                log.progress(i + 1, pagesToUpdate.length, `${name}: ${pageData.title}`);
 
                 // Read HTML content
                 let html = pages[name].html;
@@ -1297,6 +1269,9 @@ async function main() {
                     );
                 }
 
+                // Replace visit paths with page IDs
+                html = replaceVisitPaths(html, pageIdMap);
+
                 await fillPageForm(page, {
                     title: pageData.title,
                     bgColor: pageData.background_color || '#000000',
@@ -1313,7 +1288,16 @@ async function main() {
                     await clearAnswers(page);
 
                     for (const ans of processedAnswers) {
-                        await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
+                        let result;
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
+                            if (result === 'filled') break;
+                            log.verbose(`    정답 추가 실패 (${attempt}/3), 재시도...`);
+                            await new Promise(r => setTimeout(r, 300));
+                        }
+                        if (result !== 'filled') {
+                            log.fail(`    정답 추가 실패: "${ans.answer}"`);
+                        }
                         log.verbose(`    정답: "${ans.answer}"`);
                     }
                 }
@@ -1362,7 +1346,7 @@ async function main() {
                     const targetPageId = pageIdMap[ans.next];
                     // Only process connections TO new pages, or FROM new/updated pages
                     const isTargetNew = newPageIds.has(targetPageId);
-                    const isSourceNewOrUpdated = newPages.includes(name) || updatedPages.includes(name);
+                    const isSourceNewOrUpdated = pagesToUpdate.includes(name);
 
                     if (isTargetNew || isSourceNewOrUpdated) {
                         if (!connections[targetPageId]) {
