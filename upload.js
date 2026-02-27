@@ -1413,6 +1413,11 @@ async function main() {
                 );
                 if (connectionSuccess) {
                     counts.connected++;
+                } else if (pages[targetName]) {
+                    // Clear hash so next run retries this page
+                    const targetMeta = pages[targetName].meta;
+                    delete targetMeta.hash;
+                    writePageMeta(contentPath, targetName, targetMeta);
                 }
                 await new Promise(r => setTimeout(r, 50));
             }
