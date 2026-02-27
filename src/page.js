@@ -278,7 +278,7 @@ async function fillPageForm(page, data) {
     if (data.content) {
         const contentSet = await setEditorContent(page, data.content);
         if (!contentSet) {
-            log.fail('에디터 콘텐츠 설정에 실패했습니다');
+            throw new Error('에디터 콘텐츠 설정에 실패했습니다');
         }
     }
 }

@@ -1289,6 +1289,7 @@ async function main() {
                 });
 
                 // Clear and re-add answers (images already processed)
+                let answerFailures = 0;
                 if (hasAnswers) {
                     await clearAnswers(page);
 
@@ -1302,6 +1303,7 @@ async function main() {
                         }
                         if (result !== 'filled') {
                             log.fail(`    정답 추가 실패: "${ans.answer}"`);
+                            answerFailures++;
                         }
                         log.verbose(`    정답: "${ans.answer}"`);
                     }
@@ -1312,8 +1314,8 @@ async function main() {
                     '페이지 저장'
                 );
 
-                // Update page meta (skip hash if images failed, so next run retries)
-                if (pageImageFailures === 0) {
+                // Update page meta (skip hash if any step failed, so next run retries)
+                if (pageImageFailures === 0 && answerFailures === 0) {
                     pageMeta.hash = pages[name].hash;
                 }
                 pageMeta.is_first = isFirst;
