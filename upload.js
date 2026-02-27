@@ -572,6 +572,7 @@ function findLocalImages(html, contentPath, rootPath = null) {
 async function uploadNewImages(browser, page, imagePaths, imageCache) {
     const updatedCache = { ...imageCache };
     const pathMap = {};
+    let failures = 0;
 
     for (const imagePath of imagePaths) {
         const checksum = calculateChecksum(imagePath);
@@ -597,12 +598,13 @@ async function uploadNewImages(browser, page, imagePaths, imageCache) {
             log.verbose(`    [이미지] 완료`);
         } else {
             log.error(`    [이미지] 실패: ${path.basename(imagePath)}`);
+            failures++;
         }
 
         await new Promise(r => setTimeout(r, 50));
     }
 
-    return { cache: updatedCache, pathMap };
+    return { cache: updatedCache, pathMap, failures };
 }
 
 /**
@@ -1243,9 +1245,12 @@ async function main() {
                 }
 
                 // Upload all images at once (before editor content is set)
+                let pageImageFailures = 0;
                 if (localImages.length > 0) {
                     log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
-                    const { cache: newCache, pathMap } = await uploadNewImages(browser, page, localImages, imageCache);
+                    const { cache: newCache, pathMap, failures: imageFailures } = await uploadNewImages(browser, page, localImages, imageCache);
+                    pageImageFailures = imageFailures;
+                    counts.failures.image += imageFailures;
                     imageCache = newCache;
 
                     labyMeta.images = imageCache;
@@ -1307,8 +1312,10 @@ async function main() {
                     '페이지 저장'
                 );
 
-                // Update page meta
-                pageMeta.hash = pages[name].hash;
+                // Update page meta (skip hash if images failed, so next run retries)
+                if (pageImageFailures === 0) {
+                    pageMeta.hash = pages[name].hash;
+                }
                 pageMeta.is_first = isFirst;
                 pageMeta.is_ending = isEnding;
                 writePageMeta(contentPath, name, pageMeta);
