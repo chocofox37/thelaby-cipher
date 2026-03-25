@@ -660,6 +660,22 @@ function replaceVisitPaths(html, pageIdMap) {
 }
 
 /**
+ * Replace goPage('path') calls in HTML with goPage('pageId')
+ * @param {string} html - HTML content
+ * @param {object} pageIdMap - Map of page name → page ID
+ * @returns {string} - HTML with page paths replaced by IDs
+ */
+function replaceGoPagePaths(html, pageIdMap) {
+    return html.replace(/goPage\('([^']+)'\)/g, (match, pagePath) => {
+        const id = pageIdMap[pagePath];
+        if (id) return `goPage('${id}')`;
+        if (/^\d+$/.test(pagePath)) return match;
+        log.error(`    goPage 경로를 찾을 수 없습니다: "${pagePath}"`);
+        return match;
+    });
+}
+
+/**
  * Escape special regex characters
  */
 function escapeRegex(str) {
@@ -1276,6 +1292,7 @@ async function main() {
 
                 // Replace visit paths with page IDs
                 html = replaceVisitPaths(html, pageIdMap);
+                html = replaceGoPagePaths(html, pageIdMap);
 
                 await fillPageForm(page, {
                     title: pageData.title,
