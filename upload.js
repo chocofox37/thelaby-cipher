@@ -1403,7 +1403,8 @@ async function main() {
                             fromPageId: fromPageId,
                             answerIndex: idx + 1,
                             fromName: name,
-                            answer: ans.answer
+                            answer: ans.answer,
+                            targetName: ans.next
                         });
                     }
                 }
@@ -1417,7 +1418,7 @@ async function main() {
             for (let i = 0; i < targetPages.length; i++) {
                 const targetPageId = targetPages[i];
                 const sources = connections[targetPageId];
-                const targetName = Object.entries(pageIdMap).find(([n, id]) => id === targetPageId)?.[0] || targetPageId;
+                const targetName = sources[0].targetName || targetPageId;
 
                 log.progress(i + 1, targetPages.length, targetName);
 
