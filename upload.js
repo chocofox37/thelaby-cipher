@@ -609,25 +609,46 @@ async function uploadNewImages(browser, page, imagePaths, imageCache) {
 
 /**
  * Replace local image paths in HTML with uploaded URLs
+ * Normalizes all paths to root-relative before matching
+ * to avoid collisions when multiple folders have same-named files.
  * @param {string} html - HTML content
- * @param {object} pathMap - localPath -> URL mapping
+ * @param {object} pathMap - localAbsPath -> URL mapping
+ * @param {string} contentDir - Directory of the HTML file
+ * @param {string} rootDir - Content root directory
  * @returns {string} HTML with replaced URLs
  */
-function replaceLocalImages(html, pathMap) {
-    let result = html;
-
-    for (const [localPath, url] of Object.entries(pathMap)) {
-        const basename = path.basename(localPath);
-        const escapedBasename = escapeRegex(basename);
-
-        // Replace src="..." attributes
-        const srcPattern = new RegExp(`src=["']([^"']*${escapedBasename})["']`, 'gi');
-        result = result.replace(srcPattern, `src="${url}"`);
-
-        // Replace url(...) in CSS - use single quotes to avoid conflict with style="..."
-        const urlPattern = new RegExp(`url\\(["']?([^"')]*${escapedBasename})["']?\\)`, 'gi');
-        result = result.replace(urlPattern, `url('${url}')`);
+function replaceLocalImages(html, pathMap, contentDir, rootDir) {
+    // Build root-relative -> URL map
+    const relMap = {};
+    for (const [absPath, url] of Object.entries(pathMap)) {
+        const rel = path.relative(rootDir, absPath).replace(/\\/g, '/');
+        relMap[rel] = url;
     }
+
+    let result = html;
+    const imageExtensions = '(png|jpg|jpeg|gif|webp|bmp)';
+    const srcRegex = new RegExp(`src=["']([^"']+\\.${imageExtensions})["']`, 'gi');
+    const urlRegex = new RegExp(`url\\(["']?([^"')]+\\.${imageExtensions})["']?\\)`, 'gi');
+
+    function replacer(match, src) {
+        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//') || src.startsWith('data:')) {
+            return match;
+        }
+        let absPath;
+        if (src.startsWith('/')) {
+            absPath = path.resolve(rootDir, src.slice(1));
+        } else {
+            absPath = path.resolve(contentDir, src);
+        }
+        const rel = path.relative(rootDir, absPath).replace(/\\/g, '/');
+        if (relMap[rel]) {
+            return match.replace(src, relMap[rel]);
+        }
+        return match;
+    }
+
+    result = result.replace(srcRegex, replacer);
+    result = result.replace(urlRegex, replacer);
 
     return result;
 }
@@ -1272,12 +1293,12 @@ async function main() {
                     labyMeta.images = imageCache;
                     fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
 
-                    html = replaceLocalImages(html, pathMap);
+                    html = replaceLocalImages(html, pathMap, pageDir, contentPath);
 
                     // Replace images in explanation HTML too
                     for (const ans of processedAnswers) {
                         if (ans.explanationHtml) {
-                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap);
+                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap, pageDir, contentPath);
                         }
                     }
                 }
