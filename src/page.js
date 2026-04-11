@@ -714,21 +714,43 @@ async function getPageList(page, labyrinthId) {
  * @param {number} answerIndex - Answer index (1-based) in the parent page
  * @returns {Promise<boolean>} Success
  */
-async function setParentConnection(page, parentPageId, answerIndex = 1) {
-    const checkboxValue = `${parentPageId}-${answerIndex}`;
-    const checkboxSelector = `input[name="prevQuestCheckList"][value="${checkboxValue}"]`;
+async function setParentConnection(page, parentPageId, answerIndex = 1, answerText = '') {
+    // First try: match by answer text in checkbox label (reliable regardless of site ordering)
+    if (answerText) {
+        const matched = await page.evaluate((parentId, text) => {
+            const checkboxes = document.querySelectorAll('input[name="prevQuestCheckList"]');
+            for (const cb of checkboxes) {
+                if (!cb.value.startsWith(parentId + '-')) continue;
+                const label = cb.parentElement?.textContent?.trim() || '';
+                if (label.includes(text)) {
+                    return cb.value;
+                }
+            }
+            return null;
+        }, parentPageId, answerText);
 
-    const checkbox = await page.$(checkboxSelector);
+        if (matched) {
+            const checkbox = await page.$(`input[name="prevQuestCheckList"][value="${matched}"]`);
+            if (checkbox) {
+                const isChecked = await checkbox.evaluate(el => el.checked);
+                if (!isChecked) await checkbox.click();
+                log.verbose(`    부모 연결 설정됨: ${matched} (답안: ${answerText})`);
+                return true;
+            }
+        }
+    }
+
+    // Fallback: match by index
+    const checkboxValue = `${parentPageId}-${answerIndex}`;
+    const checkbox = await page.$(`input[name="prevQuestCheckList"][value="${checkboxValue}"]`);
     if (checkbox) {
         const isChecked = await checkbox.evaluate(el => el.checked);
-        if (!isChecked) {
-            await checkbox.click();
-        }
-        log.verbose(`    부모 연결 설정됨: ${checkboxValue}`);
+        if (!isChecked) await checkbox.click();
+        log.verbose(`    부모 연결 설정됨: ${checkboxValue} (인덱스 폴백)`);
         return true;
     }
 
-    // List available checkboxes for debugging (read-only)
+    // Debug: list available checkboxes
     const available = await page.$$eval('input[name="prevQuestCheckList"]', checkboxes =>
         checkboxes.map(cb => ({
             value: cb.value,
@@ -736,7 +758,7 @@ async function setParentConnection(page, parentPageId, answerIndex = 1) {
         }))
     );
 
-    log.error(`    부모 연결 실패. 필요: ${checkboxValue}`);
+    log.error(`    부모 연결 실패. 답안: "${answerText}", 인덱스: ${checkboxValue}`);
     log.verbose(`    사용 가능한 연결: ${JSON.stringify(available)}`);
     return false;
 }

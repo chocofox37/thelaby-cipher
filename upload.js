@@ -1430,7 +1430,7 @@ async function main() {
 
                 let connectionSuccess = true;
                 for (const src of sources) {
-                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex);
+                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex, src.answer);
                     if (success) {
                         log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
                     } else {
