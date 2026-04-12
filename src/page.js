@@ -34,24 +34,10 @@ async function navigateToCreatePage(page, labyrinthId) {
  * @param {string} pageId - Page ID (questSeqn)
  */
 async function navigateToEditPage(page, labyrinthId, pageId) {
-    // First go to page list
-    const listUrl = `${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`;
-    await page.goto(listUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-    await new Promise(r => setTimeout(r, 100));
-
-    // Find and click the page link - look for onclick containing fn_click with pageId
-    const linkSelector = `a[onclick*="fn_click('${pageId}')"], a[onclick*="fn_click(\\"${pageId}\\")"]`;
-    const linkElement = await page.$(linkSelector);
-
-    if (linkElement) {
-        await linkElement.click();
-        log.verbose(`    편집 화면 링크 클릭됨`);
-    } else {
-        log.verbose(`    편집 화면 링크를 찾을 수 없음`);
-    }
-
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
-    await new Promise(r => setTimeout(r, 100));
+    const editUrl = `${BASE_URL}/labyrinth/laby/quest/registQuestion.do?labyrinthSeqn=${labyrinthId}&questSeqn=${pageId}`;
+    await page.goto(editUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 500));
+    log.verbose(`    편집 화면 이동됨`);
 }
 
 /**

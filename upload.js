@@ -1403,8 +1403,7 @@ async function main() {
                             fromPageId: fromPageId,
                             answerIndex: idx + 1,
                             fromName: name,
-                            answer: ans.answer,
-                            targetName: ans.next
+                            answer: ans.answer
                         });
                     }
                 }
@@ -1418,7 +1417,7 @@ async function main() {
             for (let i = 0; i < targetPages.length; i++) {
                 const targetPageId = targetPages[i];
                 const sources = connections[targetPageId];
-                const targetName = sources[0].targetName || targetPageId;
+                const targetName = Object.entries(pageIdMap).find(([n, id]) => id === targetPageId)?.[0] || targetPageId;
 
                 log.progress(i + 1, targetPages.length, targetName);
 
@@ -1430,7 +1429,7 @@ async function main() {
 
                 let connectionSuccess = true;
                 for (const src of sources) {
-                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex, src.answer);
+                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex);
                     if (success) {
                         log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
                     } else {
