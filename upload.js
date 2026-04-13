@@ -1189,8 +1189,8 @@ async function main() {
                     content: '.'
                 });
 
-                // Always add 1 dummy answer for ID allocation (slot 0)
-                await addAnswer(page, '.', false, '', 0);
+                // Always add 1 dummy answer for ID allocation
+                await addAnswer(page, '.', false, '');
 
                 const pageId = await withRetry(
                     () => submitPageForm(page, labyrinthId, pageData.title),
@@ -1331,11 +1331,10 @@ async function main() {
                 if (hasAnswers) {
                     await clearAnswers(page);
 
-                    for (let ai = 0; ai < processedAnswers.length; ai++) {
-                        const ans = processedAnswers[ai];
+                    for (const ans of processedAnswers) {
                         let result;
                         for (let attempt = 1; attempt <= 3; attempt++) {
-                            result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml, ai);
+                            result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
                             if (result === 'filled') break;
                             log.verbose(`    정답 추가 실패 (${attempt}/3), 재시도...`);
                             await new Promise(r => setTimeout(r, 300));
@@ -1344,7 +1343,7 @@ async function main() {
                             log.fail(`    정답 추가 실패: "${ans.answer}"`);
                             answerFailures++;
                         }
-                        log.verbose(`    정답 [${ai}]: "${ans.answer}"`);
+                        log.verbose(`    정답: "${ans.answer}"`);
                     }
                 }
 
