@@ -568,29 +568,8 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
 
     if (newPageId) {
         log.verbose(`    페이지 ID: ${newPageId}`);
-        return newPageId;
-    }
-
-    // Search in page list
-    if (labyrinthId) {
-        log.verbose(`    페이지 목록에서 검색 중...`);
-        await page.goto(`${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`,
-                        { waitUntil: 'networkidle2', timeout: 20000 });
-        await new Promise(r => setTimeout(r, 100));
-
-        newPageId = await page.evaluate(() => {
-            let maxId = null, maxVal = 0;
-            document.querySelectorAll('a').forEach(link => {
-                const match = (link.getAttribute('onclick') || '').match(/fn_click\(['"]?(\d+)['"]?\)/);
-                if (match) {
-                    const val = parseInt(match[1]);
-                    if (val > maxVal) { maxVal = val; maxId = match[1]; }
-                }
-            });
-            return maxId;
-        });
-
-        if (newPageId) log.verbose(`    발견됨: ${newPageId}`);
+    } else {
+        log.verbose(`    페이지 ID를 받아올 수 없음`);
     }
 
     return newPageId;
