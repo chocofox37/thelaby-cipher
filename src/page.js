@@ -487,11 +487,10 @@ async function clearAnswers(page) {
  * Submit the page form (create or update)
  * @param {object} page - Puppeteer page
  * @param {string} labyrinthId - Labyrinth ID (for finding page in list after redirect)
- * @param {string} pageTitle - Page title (unused, kept for compatibility)
- * @param {string[]} knownPageIds - Already known page IDs (to find new ID by exclusion)
+ * @param {string} pageTitle - Page title (for finding page in list after redirect)
  * @returns {Promise<string|null>} New page ID if created, or null
  */
-async function submitPageForm(page, labyrinthId = null, pageTitle = null, knownPageIds = null) {
+async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     // Handle beforeunload dialog (browser's "Leave site?" confirmation)
     const dialogHandler = async (dialog) => {
         log.verbose(`    브라우저 대화상자: ${dialog.type()} - ${dialog.message()}`);
@@ -527,34 +526,36 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null, knownP
     await new Promise(r => setTimeout(r, 300));
     log.verbose(`    팝업 대기 완료, 확인 버튼 찾는 중...`);
 
-    // Click the OK button (confirmation popup) and wait for navigation
-    // Site flow: confirm click → setAnswer() → frm.submit() → server redirect
+    // Click the OK button (confirmation popup)
     try {
         const confirmBtn = await page.$('#labyPopupOk');
         log.verbose(`    확인 버튼 검색 결과: ${confirmBtn ? '발견' : '없음'}`);
         if (confirmBtn) {
-            const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
             await confirmBtn.click();
-            log.verbose(`    확인 팝업 클릭, 네비게이션 대기 중...`);
-            await navPromise;
-            log.verbose(`    네비게이션 완료`);
+            log.verbose(`    확인 팝업 클릭 완료`);
         }
     } catch (e) {
-        log.verbose(`    확인/네비게이션 오류: ${e.message}`);
+        log.verbose(`    확인 팝업 클릭 오류: ${e.message}`);
     }
 
-    // Handle success popup if present after navigation
-    await new Promise(r => setTimeout(r, 300));
+    // Wait for possible second popup (success) and click OK
+    log.verbose(`    두 번째 팝업 대기 중...`);
+    await new Promise(r => setTimeout(r, 500));
+    log.verbose(`    두 번째 팝업 대기 완료`);
     try {
         const okBtn = await page.$('#labyPopupOk');
+        log.verbose(`    완료 버튼 검색 결과: ${okBtn ? '발견' : '없음'}`);
         if (okBtn) {
             await okBtn.click();
             log.verbose(`    완료 팝업 클릭`);
-            await new Promise(r => setTimeout(r, 500));
         }
     } catch (e) {
-        // No popup, continue
+        log.verbose(`    완료 팝업 클릭 오류: ${e.message}`);
     }
+    log.verbose(`    팝업 처리 완료`);
+
+    // Wait for navigation
+    await new Promise(r => setTimeout(r, 100));
 
     const currentUrl = await page.url();
     log.verbose(`    현재 URL: ${currentUrl}`);
@@ -570,38 +571,29 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null, knownP
         return newPageId;
     }
 
-    // Fallback: find new page ID from page list by excluding known IDs
-    if (labyrinthId && Array.isArray(knownPageIds)) {
-        log.verbose(`    페이지 목록에서 새 ID 검색 중... (기존 ${knownPageIds.length}개 제외)`);
+    // Search in page list
+    if (labyrinthId) {
+        log.verbose(`    페이지 목록에서 검색 중...`);
         await page.goto(`${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`,
                         { waitUntil: 'networkidle2', timeout: 20000 });
         await new Promise(r => setTimeout(r, 100));
 
-        const allIds = await page.evaluate(() => {
-            const ids = [];
+        newPageId = await page.evaluate(() => {
+            let maxId = null, maxVal = 0;
             document.querySelectorAll('a').forEach(link => {
                 const match = (link.getAttribute('onclick') || '').match(/fn_click\(['"]?(\d+)['"]?\)/);
-                if (match) ids.push(match[1]);
+                if (match) {
+                    const val = parseInt(match[1]);
+                    if (val > maxVal) { maxVal = val; maxId = match[1]; }
+                }
             });
-            return ids;
+            return maxId;
         });
 
-        const knownSet = new Set(knownPageIds.map(String));
-        const newIds = allIds.filter(id => !knownSet.has(id));
-
-        if (newIds.length === 1) {
-            newPageId = newIds[0];
-            log.verbose(`    목록에서 새 ID 발견: ${newPageId}`);
-            return newPageId;
-        } else if (newIds.length > 1) {
-            log.verbose(`    새 ID가 ${newIds.length}개 발견됨 (특정 불가): ${newIds.join(', ')}`);
-        } else {
-            log.verbose(`    목록에서 새 ID를 찾을 수 없음`);
-        }
+        if (newPageId) log.verbose(`    발견됨: ${newPageId}`);
     }
 
-    log.verbose(`    페이지 ID를 받아올 수 없음`);
-    return null;
+    return newPageId;
 }
 
 /**

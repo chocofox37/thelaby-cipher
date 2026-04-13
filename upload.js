@@ -1193,7 +1193,7 @@ async function main() {
                 await addAnswer(page, '.', false, '');
 
                 const pageId = await withRetry(
-                    () => submitPageForm(page, labyrinthId, pageData.title, pageIds),
+                    () => submitPageForm(page, labyrinthId, pageData.title),
                     '페이지 저장'
                 );
 
