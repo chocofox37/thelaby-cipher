@@ -487,10 +487,11 @@ async function clearAnswers(page) {
  * Submit the page form (create or update)
  * @param {object} page - Puppeteer page
  * @param {string} labyrinthId - Labyrinth ID (for finding page in list after redirect)
- * @param {string} pageTitle - Page title (for finding page in list after redirect)
+ * @param {string} pageTitle - Page title (unused, kept for compatibility)
+ * @param {string[]} knownPageIds - Already known page IDs (to find new ID by exclusion)
  * @returns {Promise<string|null>} New page ID if created, or null
  */
-async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
+async function submitPageForm(page, labyrinthId = null, pageTitle = null, knownPageIds = null) {
     // Handle beforeunload dialog (browser's "Leave site?" confirmation)
     const dialogHandler = async (dialog) => {
         log.verbose(`    브라우저 대화상자: ${dialog.type()} - ${dialog.message()}`);
@@ -568,11 +569,41 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
 
     if (newPageId) {
         log.verbose(`    페이지 ID: ${newPageId}`);
-    } else {
-        log.verbose(`    페이지 ID를 받아올 수 없음`);
+        return newPageId;
     }
 
-    return newPageId;
+    // Fallback: find new page ID from page list by excluding known IDs
+    if (labyrinthId && Array.isArray(knownPageIds)) {
+        log.verbose(`    페이지 목록에서 새 ID 검색 중... (기존 ${knownPageIds.length}개 제외)`);
+        await page.goto(`${BASE_URL}/labyrinth/laby/quest/questionList.do?labyrinthSeqn=${labyrinthId}`,
+                        { waitUntil: 'networkidle2', timeout: 20000 });
+        await new Promise(r => setTimeout(r, 100));
+
+        const allIds = await page.evaluate(() => {
+            const ids = [];
+            document.querySelectorAll('a').forEach(link => {
+                const match = (link.getAttribute('onclick') || '').match(/fn_click\(['"]?(\d+)['"]?\)/);
+                if (match) ids.push(match[1]);
+            });
+            return ids;
+        });
+
+        const knownSet = new Set(knownPageIds.map(String));
+        const newIds = allIds.filter(id => !knownSet.has(id));
+
+        if (newIds.length === 1) {
+            newPageId = newIds[0];
+            log.verbose(`    목록에서 새 ID 발견: ${newPageId}`);
+            return newPageId;
+        } else if (newIds.length > 1) {
+            log.verbose(`    새 ID가 ${newIds.length}개 발견됨 (특정 불가): ${newIds.join(', ')}`);
+        } else {
+            log.verbose(`    목록에서 새 ID를 찾을 수 없음`);
+        }
+    }
+
+    log.verbose(`    페이지 ID를 받아올 수 없음`);
+    return null;
 }
 
 /**
