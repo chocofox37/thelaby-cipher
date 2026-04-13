@@ -527,36 +527,34 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null, knownP
     await new Promise(r => setTimeout(r, 300));
     log.verbose(`    팝업 대기 완료, 확인 버튼 찾는 중...`);
 
-    // Click the OK button (confirmation popup)
+    // Click the OK button (confirmation popup) and wait for navigation
+    // Site flow: confirm click → setAnswer() → frm.submit() → server redirect
     try {
         const confirmBtn = await page.$('#labyPopupOk');
         log.verbose(`    확인 버튼 검색 결과: ${confirmBtn ? '발견' : '없음'}`);
         if (confirmBtn) {
+            const navPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => null);
             await confirmBtn.click();
-            log.verbose(`    확인 팝업 클릭 완료`);
+            log.verbose(`    확인 팝업 클릭, 네비게이션 대기 중...`);
+            await navPromise;
+            log.verbose(`    네비게이션 완료`);
         }
     } catch (e) {
-        log.verbose(`    확인 팝업 클릭 오류: ${e.message}`);
+        log.verbose(`    확인/네비게이션 오류: ${e.message}`);
     }
 
-    // Wait for possible second popup (success) and click OK
-    log.verbose(`    두 번째 팝업 대기 중...`);
-    await new Promise(r => setTimeout(r, 500));
-    log.verbose(`    두 번째 팝업 대기 완료`);
+    // Handle success popup if present after navigation
+    await new Promise(r => setTimeout(r, 300));
     try {
         const okBtn = await page.$('#labyPopupOk');
-        log.verbose(`    완료 버튼 검색 결과: ${okBtn ? '발견' : '없음'}`);
         if (okBtn) {
             await okBtn.click();
             log.verbose(`    완료 팝업 클릭`);
+            await new Promise(r => setTimeout(r, 500));
         }
     } catch (e) {
-        log.verbose(`    완료 팝업 클릭 오류: ${e.message}`);
+        // No popup, continue
     }
-    log.verbose(`    팝업 처리 완료`);
-
-    // Wait for navigation
-    await new Promise(r => setTimeout(r, 100));
 
     const currentUrl = await page.url();
     log.verbose(`    현재 URL: ${currentUrl}`);
