@@ -278,89 +278,79 @@ async function fillPageForm(page, data) {
  * @param {boolean} isPublic - Whether answer is public
  * @param {string} explanation - Answer explanation
  */
-async function addAnswer(page, answer, isPublic = false, explanation = '') {
-    // Check if we need a new row by reading current state
-    const needNewRow = await page.evaluate(() => {
-        const inputs = document.querySelectorAll('input.answer');
-        for (const input of inputs) {
-            const tr = input.closest('tr');
-            // Check if visible and empty (display !== 'none')
-            if (tr && tr.style.display !== 'none') {
-                if (!input.value || input.value.trim() === '') {
-                    return false; // Found empty slot, don't need new row
-                }
-            }
-        }
-        return true; // All slots filled, need new row
+async function addAnswer(page, answer, isPublic = false, explanation = '', slotIndex = -1) {
+    // Get visible answer slots
+    const getVisibleSlots = () => page.evaluate(() => {
+        return Array.from(document.querySelectorAll('input.answer'))
+            .map((el, i) => {
+                const tr = el.closest('tr');
+                return { index: i, visible: tr && tr.style.display !== 'none', empty: !el.value || el.value.trim() === '' };
+            })
+            .filter(s => s.visible);
     });
 
-    // Only click add button if we need a new row
-    if (needNewRow) {
+    let visibleSlots = await getVisibleSlots();
+    const targetIdx = slotIndex >= 0 ? slotIndex : visibleSlots.length; // append by default
+
+    // Add new rows until we have enough visible slots
+    while (visibleSlots.length <= targetIdx) {
         const addBtnSelector = 'input[value="정답추가"], input[onclick*="addAnswer(this)"]';
         const addBtn = await page.$(addBtnSelector);
-        if (addBtn) {
-            const isDisabled = await addBtn.evaluate(el => el.disabled);
-            if (!isDisabled) {
-                // Count current visible rows before clicking
-                const countBefore = await page.evaluate(() => {
-                    return Array.from(document.querySelectorAll('input.answer')).filter(el => {
-                        const tr = el.closest('tr');
-                        return tr && tr.style.display !== 'none';
-                    }).length;
-                });
+        if (!addBtn) { log.verbose(`    정답추가 버튼을 찾을 수 없음`); break; }
 
-                await addBtn.click();
-                log.verbose(`    정답추가 버튼 클릭`);
+        const isDisabled = await addBtn.evaluate(el => el.disabled);
+        if (isDisabled) { log.verbose(`    정답추가 버튼 비활성화됨`); break; }
 
-                // Wait for new row to appear
-                await page.waitForFunction((prevCount) => {
-                    const inputs = Array.from(document.querySelectorAll('input.answer')).filter(el => {
-                        const tr = el.closest('tr');
-                        return tr && tr.style.display !== 'none';
-                    });
-                    return inputs.length > prevCount;
-                }, { timeout: 5000 }, countBefore);
-            } else {
-                log.verbose(`    정답추가 버튼 비활성화됨`);
-            }
-        } else {
-            log.verbose(`    정답추가 버튼을 찾을 수 없음`);
-        }
+        const countBefore = visibleSlots.length;
+        await addBtn.click();
+        log.verbose(`    정답추가 버튼 클릭`);
+
+        await page.waitForFunction((prev) => {
+            return Array.from(document.querySelectorAll('input.answer')).filter(el => {
+                const tr = el.closest('tr');
+                return tr && tr.style.display !== 'none';
+            }).length > prev;
+        }, { timeout: 5000 }, countBefore);
+
+        visibleSlots = await getVisibleSlots();
     }
 
-    // Find the first empty visible answer input and fill it
-    const answerInputs = await page.$$('input.answer');
-    let filled = false;
+    // Target the specific slot by index among visible inputs
+    const allInputs = await page.$$('input.answer');
     let answerInputEl = null;
+    let visibleIdx = 0;
 
-    for (let i = 0; i < answerInputs.length; i++) {
-        const input = answerInputs[i];
-
-        // Check if this input is visible and empty
-        const inputState = await input.evaluate(el => {
+    for (const input of allInputs) {
+        const isVisible = await input.evaluate(el => {
             const tr = el.closest('tr');
-            const isVisible = tr && tr.style.display !== 'none';
-            const isEmpty = !el.value || el.value.trim() === '';
-            return { isVisible, isEmpty };
+            return tr && tr.style.display !== 'none';
         });
+        if (!isVisible) continue;
 
-        if (inputState.isVisible && inputState.isEmpty) {
-            // Click and type into the answer input
-            await input.click();
+        if (visibleIdx === targetIdx) {
+            // Clear existing value if any, then type new answer
+            await input.click({ clickCount: 3 });
+            await page.keyboard.press('Backspace');
             await input.type(answer);
             answerInputEl = input;
-            filled = true;
             break;
         }
+        visibleIdx++;
     }
 
-    if (!filled || !answerInputEl) {
-        log.verbose(`    빈 정답 슬롯을 찾을 수 없음`);
+    if (!answerInputEl) {
+        log.verbose(`    정답 슬롯 ${targetIdx}을(를) 찾을 수 없음`);
         return 'no empty slot';
     }
 
-    // Get the row element for finding related elements
-    const answerRow = await answerInputEl.evaluateHandle(el => el.closest('tr'));
+    // Set the route value for this answer slot (1-based index)
+    await answerInputEl.evaluate((el, routeVal) => {
+        const tr = el.closest('tr');
+        if (tr) {
+            const routeInput = tr.querySelector('input.route');
+            if (routeInput) routeInput.value = routeVal;
+        }
+    }, targetIdx + 1);
 
     // Handle isPublic checkbox (정답 공개 여부)
     // Note: The checkbox is in the NEXT row after the answer input row
@@ -622,8 +612,9 @@ async function createPage(browser, page, labyrinthId, pageData) {
 
     // Add answers if provided
     if (pageData.answers && pageData.answers.length > 0) {
-        for (const ans of pageData.answers) {
-            await addAnswer(page, ans.answer, ans.route || '', ans.isPublic || false, ans.explanation || '');
+        for (let i = 0; i < pageData.answers.length; i++) {
+            const ans = pageData.answers[i];
+            await addAnswer(page, ans.answer, ans.isPublic || false, ans.explanation || '', i);
         }
     }
 
@@ -650,8 +641,9 @@ async function updatePage(browser, page, labyrinthId, pageId, pageData) {
     // Handle answers if provided
     if (pageData.answers !== undefined) {
         await clearAnswers(page);
-        for (const ans of pageData.answers) {
-            await addAnswer(page, ans.answer, ans.route || '', ans.isPublic || false, ans.explanation || '');
+        for (let i = 0; i < pageData.answers.length; i++) {
+            const ans = pageData.answers[i];
+            await addAnswer(page, ans.answer, ans.isPublic || false, ans.explanation || '', i);
         }
     }
 
