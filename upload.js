@@ -1189,8 +1189,8 @@ async function main() {
                     content: '.'
                 });
 
-                // Always add 1 dummy answer for ID allocation
-                await addAnswer(page, '.', false, '');
+                // Always add 1 dummy answer for ID allocation (slot 0)
+                await addAnswer(page, '.', false, '', 0);
 
                 const pageId = await withRetry(
                     () => submitPageForm(page, labyrinthId, pageData.title),
