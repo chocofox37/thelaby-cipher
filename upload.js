@@ -1350,17 +1350,17 @@ async function main() {
                     content: html
                 });
 
-                // Add answers
+                // Add answers (only for new/recreated pages — update-in-place pages already have correct answers)
                 let answerFailures = 0;
-                if (hasAnswers) {
+                const isNewPage = newPages.includes(name);
+                if (hasAnswers && isNewPage) {
                     // For new pages, the first slot has a dummy answer from Step 4.
                     // Overwrite it, then add the rest.
-                    const isNewPage = newPages.includes(name);
 
                     for (let j = 0; j < processedAnswers.length; j++) {
                         const ans = processedAnswers[j];
 
-                        if (j === 0 && isNewPage) {
+                        if (j === 0) {
                             // Overwrite the dummy answer in the first slot
                             const firstInput = await page.evaluateHandle(() => {
                                 const inputs = document.querySelectorAll('input.answer');

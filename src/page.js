@@ -304,6 +304,7 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
                 return 'button disabled';
             }
             await addBtn.click();
+            await new Promise(r => setTimeout(r, 100));
             log.verbose(`    정답추가 버튼 클릭`);
         } else {
             log.verbose(`    정답추가 버튼을 찾을 수 없음`);
