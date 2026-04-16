@@ -272,106 +272,77 @@ async function fillPageForm(page, data) {
 
 /**
  * Add an answer to the page
+ * Mimics human interaction: clicks the site's "정답추가" button to create a new row,
+ * then types into the empty input field.
  * @param {object} page - Puppeteer page
  * @param {string} answer - Answer text
- * @param {string} nextPageId - Next page ID (route)
  * @param {boolean} isPublic - Whether answer is public
  * @param {string} explanation - Answer explanation
  */
 async function addAnswer(page, answer, isPublic = false, explanation = '') {
-    // Check if we need a new row by reading current state
-    const needNewRow = await page.evaluate(() => {
+    // Check if there's an empty visible slot
+    const hasEmptySlot = await page.evaluate(() => {
         const inputs = document.querySelectorAll('input.answer');
         for (const input of inputs) {
             const tr = input.closest('tr');
-            // Check if visible and empty (display !== 'none')
             if (tr && tr.style.display !== 'none') {
                 if (!input.value || input.value.trim() === '') {
-                    return false; // Found empty slot, don't need new row
+                    return true;
                 }
             }
         }
-        return true; // All slots filled, need new row
+        return false;
     });
 
-    // Only click add button if we need a new row
-    if (needNewRow) {
-        const addBtnSelector = 'input[value="정답추가"], input[onclick*="addAnswer(this)"]';
-        const addBtn = await page.$(addBtnSelector);
+    // If no empty slot, click the "정답추가" button (calls site's addAnswer JS function)
+    if (!hasEmptySlot) {
+        const addBtn = await page.$('input[value="정답추가"]');
         if (addBtn) {
             const isDisabled = await addBtn.evaluate(el => el.disabled);
-            if (!isDisabled) {
-                // Count current visible rows before clicking
-                const countBefore = await page.evaluate(() => {
-                    return Array.from(document.querySelectorAll('input.answer')).filter(el => {
-                        const tr = el.closest('tr');
-                        return tr && tr.style.display !== 'none';
-                    }).length;
-                });
-
-                await addBtn.click();
-                log.verbose(`    정답추가 버튼 클릭`);
-
-                // Wait for new row to appear
-                await page.waitForFunction((prevCount) => {
-                    const inputs = Array.from(document.querySelectorAll('input.answer')).filter(el => {
-                        const tr = el.closest('tr');
-                        return tr && tr.style.display !== 'none';
-                    });
-                    return inputs.length > prevCount;
-                }, { timeout: 5000 }, countBefore);
-            } else {
+            if (isDisabled) {
                 log.verbose(`    정답추가 버튼 비활성화됨`);
+                return 'button disabled';
             }
+            await addBtn.click();
+            log.verbose(`    정답추가 버튼 클릭`);
         } else {
             log.verbose(`    정답추가 버튼을 찾을 수 없음`);
+            return 'no add button';
         }
     }
 
     // Find the first empty visible answer input and fill it
-    const answerInputs = await page.$$('input.answer');
-    let filled = false;
-    let answerInputEl = null;
-
-    for (let i = 0; i < answerInputs.length; i++) {
-        const input = answerInputs[i];
-
-        // Check if this input is visible and empty
-        const inputState = await input.evaluate(el => {
-            const tr = el.closest('tr');
-            const isVisible = tr && tr.style.display !== 'none';
-            const isEmpty = !el.value || el.value.trim() === '';
-            return { isVisible, isEmpty };
-        });
-
-        if (inputState.isVisible && inputState.isEmpty) {
-            // Click and type into the answer input
-            await input.click();
-            await input.type(answer);
-            answerInputEl = input;
-            filled = true;
-            break;
+    const answerInputEl = await page.evaluateHandle(() => {
+        const inputs = document.querySelectorAll('input.answer');
+        for (const input of inputs) {
+            const tr = input.closest('tr');
+            if (tr && tr.style.display !== 'none') {
+                if (!input.value || input.value.trim() === '') {
+                    return input;
+                }
+            }
         }
-    }
+        return null;
+    });
 
-    if (!filled || !answerInputEl) {
+    if (!answerInputEl || await answerInputEl.evaluate(el => el === null)) {
         log.verbose(`    빈 정답 슬롯을 찾을 수 없음`);
         return 'no empty slot';
     }
 
-    // Get the row element for finding related elements
-    const answerRow = await answerInputEl.evaluateHandle(el => el.closest('tr'));
+    // Type the answer
+    await answerInputEl.click();
+    await answerInputEl.type(answer);
 
-    // Handle isPublic checkbox (정답 공개 여부)
-    // Note: The checkbox is in the NEXT row after the answer input row
+    // The answerOpen/explanation row is the next sibling tr
     const answerOpenRow = await answerInputEl.evaluateHandle(el => {
         const answerTr = el.closest('tr');
         return answerTr ? answerTr.nextElementSibling : null;
     });
 
+    // Handle isPublic checkbox (정답 공개 여부)
     if (isPublic && answerOpenRow) {
         try {
-            // Find the "정답 공개 여부" checkbox (input.answerOpen)
             const publicCheckbox = await answerOpenRow.$('input.answerOpen');
             if (publicCheckbox) {
                 const isChecked = await publicCheckbox.evaluate(el => el.checked);
@@ -379,8 +350,6 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
                     await publicCheckbox.click();
                     log.verbose(`    정답 공개 체크됨`);
                 }
-            } else {
-                log.verbose(`    공개 체크박스를 찾을 수 없음`);
             }
         } catch (e) {
             log.verbose(`    공개 체크박스 처리 오류: ${e.message}`);
@@ -388,30 +357,23 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
     }
 
     // Handle explanation textarea (해설)
-    // Note: The textarea is in the same row as the answerOpen checkbox
     if (explanation && explanation.trim() !== '' && answerOpenRow) {
         try {
-            // Find the explanation textarea (textarea.answerExplain)
             const explanationTextarea = await answerOpenRow.$('textarea.answerExplain');
             if (explanationTextarea) {
-                // First check/click answerOpen checkbox to enable textarea
+                // Ensure answerOpen is checked (enables the textarea)
                 const publicCheckbox = await answerOpenRow.$('input.answerOpen');
                 if (publicCheckbox) {
                     const isChecked = await publicCheckbox.evaluate(el => el.checked);
                     if (!isChecked) {
                         await publicCheckbox.click();
-                        await new Promise(r => setTimeout(r, 100));
                     }
                 }
-
-                // Clear existing content and set new value directly
                 await explanationTextarea.evaluate((el, content) => {
                     el.value = content;
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                 }, explanation);
                 log.verbose(`    해설 입력됨`);
-            } else {
-                log.verbose(`    해설 textarea를 찾을 수 없음`);
             }
         } catch (e) {
             log.verbose(`    해설 textarea 처리 오류: ${e.message}`);
@@ -420,77 +382,6 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
 
     log.verbose(`    정답 입력됨`);
     return 'filled';
-}
-
-/**
- * Get existing answers from the page
- * @param {object} page - Puppeteer page
- * @returns {Promise<Array>} Array of answer objects
- */
-async function getAnswers(page) {
-    return await page.evaluate(() => {
-        const answers = [];
-        // Get all added answer rows (class .addAnswerTr), excluding hidden templates
-        const answerRows = document.querySelectorAll('.addAnswerTr');
-
-        answerRows.forEach((row, idx) => {
-            const answerInput = row.querySelector('input.answer');
-            const routeInput = row.querySelector('input.route');
-
-            if (answerInput && answerInput.value) {
-                answers.push({
-                    index: idx,
-                    answer: answerInput.value,
-                    route: routeInput ? routeInput.value : ''
-                });
-            }
-        });
-
-        return answers;
-    });
-}
-
-/**
- * Clear all answers from the page
- * @param {object} page - Puppeteer page
- */
-async function clearAnswers(page) {
-    // Clear all answer input values by clicking and deleting
-    const answerInputs = await page.$$('input.answer');
-    for (const input of answerInputs) {
-        const hasValue = await input.evaluate(el => el.value && el.value.trim() !== '');
-        if (hasValue) {
-            await input.click({ clickCount: 3 });
-            await page.keyboard.press('Backspace');
-        }
-    }
-
-    // Click delete buttons repeatedly to remove extra answer rows
-    let count = 0;
-    while (count < 20) {
-        // Find visible delete link
-        const deleteLinks = await page.$$('a[onclick*="deleteAnswer"]');
-        let clicked = false;
-
-        for (const link of deleteLinks) {
-            const isVisible = await link.evaluate(el => {
-                const tr = el.closest('tr');
-                return tr && tr.style.display !== 'none' && tr.offsetParent !== null;
-            });
-
-            if (isVisible) {
-                await link.click();
-                clicked = true;
-                await new Promise(r => setTimeout(r, 100));
-                break;
-            }
-        }
-
-        if (!clicked) break;
-        count++;
-    }
-
-    await new Promise(r => setTimeout(r, 100));
 }
 
 /**
@@ -604,60 +495,6 @@ async function submitPageForm(page, labyrinthId = null, pageTitle = null) {
     }
 
     return newPageId;
-}
-
-/**
- * Create a new page
- * @param {object} browser - Puppeteer browser
- * @param {object} page - Puppeteer page
- * @param {string} labyrinthId - Labyrinth ID
- * @param {object} pageData - Page data
- * @returns {Promise<string|null>} New page ID
- */
-async function createPage(browser, page, labyrinthId, pageData) {
-    log.verbose(`    페이지 생성 중: ${pageData.title}`);
-
-    await navigateToCreatePage(page, labyrinthId);
-    await fillPageForm(page, pageData);
-
-    // Add answers if provided
-    if (pageData.answers && pageData.answers.length > 0) {
-        for (const ans of pageData.answers) {
-            await addAnswer(page, ans.answer, ans.route || '', ans.isPublic || false, ans.explanation || '');
-        }
-    }
-
-    const pageId = await submitPageForm(page, labyrinthId, pageData.title);
-    log.verbose(`    페이지 생성됨 (ID: ${pageId})`);
-    return pageId;
-}
-
-/**
- * Update an existing page
- * @param {object} browser - Puppeteer browser
- * @param {object} page - Puppeteer page
- * @param {string} labyrinthId - Labyrinth ID
- * @param {string} pageId - Page ID to update
- * @param {object} pageData - Page data
- * @returns {Promise<boolean>} Success
- */
-async function updatePage(browser, page, labyrinthId, pageId, pageData) {
-    log.verbose(`    페이지 수정 중: ${pageId}`);
-
-    await navigateToEditPage(page, labyrinthId, pageId);
-    await fillPageForm(page, pageData);
-
-    // Handle answers if provided
-    if (pageData.answers !== undefined) {
-        await clearAnswers(page);
-        for (const ans of pageData.answers) {
-            await addAnswer(page, ans.answer, ans.route || '', ans.isPublic || false, ans.explanation || '');
-        }
-    }
-
-    await submitPageForm(page);
-    log.verbose(`    페이지 수정됨: ${pageId}`);
-    return true;
 }
 
 /**
@@ -839,14 +676,10 @@ module.exports = {
     setEditorContent,
     fillPageForm,
     addAnswer,
-    getAnswers,
-    clearAnswers,
     setParentConnection,
     clearParentConnections,
     getParentConnections,
     submitPageForm,
-    createPage,
-    updatePage,
     getPageList,
     deletePage
 };

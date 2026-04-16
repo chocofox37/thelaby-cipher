@@ -189,7 +189,6 @@ const {
     navigateToEditPage,
     fillPageForm,
     addAnswer,
-    clearAnswers,
     submitPageForm,
     getPageList,
     setParentConnection,
@@ -1074,22 +1073,47 @@ async function main() {
         const unchangedPages = [];
 
         // Normal pages: check if content changed
+        // If answers changed, the page must be deleted and recreated
         for (const name of states.normal) {
             const pageInfo = pages[name];
             if (pageInfo.meta.hash !== pageInfo.hash) {
-                updatedPages.push(name);
+                const oldAnswers = pageInfo.meta.answers || [];
+                const newAnswers = (pageInfo.json.answers || []).map(a => a.answer);
+                const answersChanged = oldAnswers.length !== newAnswers.length ||
+                    oldAnswers.some((a, i) => a !== newAnswers[i]);
+                if (answersChanged) {
+                    // Will be deleted and recreated
+                    updatedPages.push({ name, recreate: true });
+                } else {
+                    updatedPages.push({ name, recreate: false });
+                }
             } else {
                 unchangedPages.push(name);
             }
         }
 
-        // Pages to delete before recreate
+        // Pages to delete before recreate (from pageIds_missing + answer-changed pages)
         const pagesToDeleteBeforeRecreate = [];
         for (const item of states.pageIds_missing) {
             pagesToDeleteBeforeRecreate.push(item.id);
             newPages.push(item.name);
             pages[item.name].meta = {};
         }
+        for (const item of updatedPages) {
+            if (item.recreate) {
+                const pageId = pages[item.name].meta.id;
+                if (pageId) {
+                    pagesToDeleteBeforeRecreate.push(pageId);
+                    newPages.push(item.name);
+                    pages[item.name].meta = {};
+                }
+            }
+        }
+
+        // Filter updatedPages to only non-recreate pages
+        const pagesToUpdateInPlace = updatedPages
+            .filter(item => !item.recreate)
+            .map(item => item.name);
 
         // Pages to delete (orphans, residual_meta with IDs)
         const pagesToDelete = [...states.orphan];
@@ -1121,7 +1145,7 @@ async function main() {
             metasToDelete.push(item.name);
         }
 
-        log.verbose(`  신규: ${newPages.length}, 수정: ${updatedPages.length}, 변경없음: ${unchangedPages.length}`);
+        log.verbose(`  신규: ${newPages.length}, 수정: ${pagesToUpdateInPlace.length}, 변경없음: ${unchangedPages.length}`);
         log.verbose(`  삭제 예정: ${pagesToDelete.length + pagesToDeleteBeforeRecreate.length}`);
 
         // ============================================================
@@ -1228,10 +1252,10 @@ async function main() {
             }
         }
 
-        // Update pages: newly created (with real content) + modified
+        // Update pages: newly created (with real content) + modified (non-recreate only)
         const pagesToUpdate = [
             ...newPages.filter(name => pages[name].meta.id),
-            ...updatedPages
+            ...pagesToUpdateInPlace
         ];
 
         log.info('');
@@ -1326,24 +1350,46 @@ async function main() {
                     content: html
                 });
 
-                // Clear and re-add answers (images already processed)
+                // Add answers
                 let answerFailures = 0;
                 if (hasAnswers) {
-                    await clearAnswers(page);
+                    // For new pages, the first slot has a dummy answer from Step 4.
+                    // Overwrite it, then add the rest.
+                    const isNewPage = newPages.includes(name);
 
-                    for (const ans of processedAnswers) {
-                        let result;
-                        for (let attempt = 1; attempt <= 3; attempt++) {
-                            result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
-                            if (result === 'filled') break;
-                            log.verbose(`    정답 추가 실패 (${attempt}/3), 재시도...`);
-                            await new Promise(r => setTimeout(r, 300));
+                    for (let j = 0; j < processedAnswers.length; j++) {
+                        const ans = processedAnswers[j];
+
+                        if (j === 0 && isNewPage) {
+                            // Overwrite the dummy answer in the first slot
+                            const firstInput = await page.evaluateHandle(() => {
+                                const inputs = document.querySelectorAll('input.answer');
+                                for (const input of inputs) {
+                                    const tr = input.closest('tr');
+                                    if (tr && tr.style.display !== 'none') return input;
+                                }
+                                return null;
+                            });
+                            if (firstInput && !(await firstInput.evaluate(el => el === null))) {
+                                await firstInput.click({ clickCount: 3 });
+                                await page.keyboard.press('Backspace');
+                                await firstInput.type(ans.answer);
+                            } else {
+                                log.fail(`    첫 번째 정답 슬롯을 찾을 수 없음`);
+                                answerFailures++;
+                            }
+                        } else {
+                            let result;
+                            for (let attempt = 1; attempt <= 3; attempt++) {
+                                result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
+                                if (result === 'filled') break;
+                                log.verbose(`    정답 추가 실패 (${attempt}/3), 재시도...`);
+                            }
+                            if (result !== 'filled') {
+                                log.fail(`    정답 추가 실패: "${ans.answer}"`);
+                                answerFailures++;
+                            }
                         }
-                        if (result !== 'filled') {
-                            log.fail(`    정답 추가 실패: "${ans.answer}"`);
-                            answerFailures++;
-                        }
-                        log.verbose(`    정답: "${ans.answer}"`);
                     }
                 }
 
@@ -1358,6 +1404,7 @@ async function main() {
                 }
                 pageMeta.is_first = isFirst;
                 pageMeta.is_ending = isEnding;
+                pageMeta.answers = (pageData.answers || []).map(a => a.answer);
                 writePageMeta(contentPath, name, pageMeta);
 
                 // Save final HTML with replaced image URLs for later use
