@@ -279,7 +279,7 @@ async function fillPageForm(page, data) {
  * @param {boolean} isPublic - Whether answer is public
  * @param {string} explanation - Answer explanation
  */
-async function addAnswer(page, answer, isPublic = false, explanation = '') {
+async function addAnswer(page, answer, isPublic = false, explanation = '', slotIndex = -1) {
     // Check if there's an empty visible slot
     const hasEmptySlot = await page.evaluate(() => {
         const inputs = document.querySelectorAll('input.answer');
@@ -334,6 +334,18 @@ async function addAnswer(page, answer, isPublic = false, explanation = '') {
     // Type the answer
     await answerInputEl.click();
     await answerInputEl.type(answer);
+
+    // Set route hidden input if slotIndex provided (1-based)
+    if (slotIndex > 0) {
+        await answerInputEl.evaluate((el, routeVal) => {
+            const tr = el.closest('tr');
+            if (tr) {
+                const routeInput = tr.querySelector('input.route');
+                if (routeInput) routeInput.value = routeVal;
+            }
+        }, slotIndex);
+        log.verbose(`    route=${slotIndex} 설정됨`);
+    }
 
     // The answerOpen/explanation row is the next sibling tr
     const answerOpenRow = await answerInputEl.evaluateHandle(el => {

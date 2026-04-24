@@ -1213,8 +1213,13 @@ async function main() {
                     content: '.'
                 });
 
-                // Always add 1 dummy answer for ID allocation
-                await addAnswer(page, '.', false, '');
+                // Add N dummy answer slots so server assigns route values.
+                // Step 5 overwrites the text with real answers + reorders via route.
+                // Unique dummy text avoids server-side dedupe.
+                const dummyCount = Math.max(1, (pageData.answers || []).length);
+                for (let d = 0; d < dummyCount; d++) {
+                    await addAnswer(page, `__dummy${d + 1}`, false, '');
+                }
 
                 const pageId = await withRetry(
                     () => submitPageForm(page, labyrinthId, pageData.title),
@@ -1354,42 +1359,36 @@ async function main() {
                 let answerFailures = 0;
                 const isNewPage = newPages.includes(name);
                 if (hasAnswers && isNewPage) {
-                    // For new pages, the first slot has a dummy answer from Step 4.
-                    // Overwrite it, then add the rest.
+                    // For new pages, Step 4 pre-created N dummy answers so all slots exist.
+                    // Each slot has a server-assigned route. Overwrite text + set route
+                    // explicitly to control order.
+                    const visibleInputs = await page.evaluateHandle(() => {
+                        return Array.from(document.querySelectorAll('input.answer')).filter(el => {
+                            const tr = el.closest('tr');
+                            return tr && tr.style.display !== 'none';
+                        });
+                    });
+                    const slotCount = await visibleInputs.evaluate(arr => arr.length);
 
                     for (let j = 0; j < processedAnswers.length; j++) {
                         const ans = processedAnswers[j];
-
-                        if (j === 0) {
-                            // Overwrite the dummy answer in the first slot
-                            const firstInput = await page.evaluateHandle(() => {
-                                const inputs = document.querySelectorAll('input.answer');
-                                for (const input of inputs) {
-                                    const tr = input.closest('tr');
-                                    if (tr && tr.style.display !== 'none') return input;
-                                }
-                                return null;
-                            });
-                            if (firstInput && !(await firstInput.evaluate(el => el === null))) {
-                                await firstInput.click({ clickCount: 3 });
-                                await page.keyboard.press('Backspace');
-                                await firstInput.type(ans.answer);
-                            } else {
-                                log.fail(`    첫 번째 정답 슬롯을 찾을 수 없음`);
-                                answerFailures++;
-                            }
-                        } else {
-                            let result;
-                            for (let attempt = 1; attempt <= 3; attempt++) {
-                                result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml);
-                                if (result === 'filled') break;
-                                log.verbose(`    정답 추가 실패 (${attempt}/3), 재시도...`);
-                            }
-                            if (result !== 'filled') {
-                                log.fail(`    정답 추가 실패: "${ans.answer}"`);
-                                answerFailures++;
-                            }
+                        if (j >= slotCount) {
+                            log.fail(`    슬롯 부족: ${j + 1}/${slotCount}`);
+                            answerFailures++;
+                            continue;
                         }
+                        const slotInput = await visibleInputs.evaluateHandle((arr, idx) => arr[idx], j);
+                        await slotInput.click({ clickCount: 3 });
+                        await page.keyboard.press('Backspace');
+                        await slotInput.type(ans.answer);
+                        await slotInput.evaluate((el, routeVal) => {
+                            const tr = el.closest('tr');
+                            if (tr) {
+                                const routeInput = tr.querySelector('input.route');
+                                if (routeInput) routeInput.value = routeVal;
+                            }
+                        }, j + 1);
+                        log.verbose(`    슬롯 ${j + 1}: "${ans.answer}" route=${j + 1}`);
                     }
                 }
 
