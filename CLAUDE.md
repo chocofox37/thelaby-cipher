@@ -37,7 +37,8 @@ thelaby-cipher/
 │   ├── login.js        # Puppeteer login/logout
 │   ├── labyrinth.js    # Labyrinth CRUD (create, update, validate)
 │   ├── page.js         # Page CRUD (create, update, delete, answers, connections)
-│   ├── image.js        # Image upload via SmartEditor2 popup
+│   ├── image.js        # Image upload via SmartEditor2 popup (button.se2_photo)
+│   ├── audio.js        # Audio upload via SmartEditor2 popup (button.se2_audio)
 │   └── logger.js       # Global logger module for consistent logging
 └── example/            # Example labyrinth content
     ├── labyrinth.json
@@ -102,7 +103,8 @@ Note: No email/password fields - these are in account.json.
     "id": "7199",
     "hash": "abc123...",
     "pageIds": ["75331", "75330"],
-    "images": { "checksum": "https://uploaded-url.jpg" }
+    "images": { "checksum": "https://uploaded-url.jpg" },
+    "audio":  { "checksum": "https://uploaded-url.mp3" }
 }
 ```
 
@@ -188,6 +190,17 @@ Direct HTML content that goes into the SmartEditor2.
 - URLs replaced in HTML before setting content
 - Absolute paths (`/image/foo.jpg`) resolved from content root
 - Missing images cause error with detailed path info
+
+### Audio Upload
+
+- Local audio paths (mp3, wav) in HTML are automatically uploaded
+- Supports `src="..."` (audio/source tags) and `href="..."` (download links)
+- Same path resolution as images (relative or `/...` from content root)
+- Editor toolbar: `button.se2_audio`; popup form id: `editor_upaudio`
+- Popup closes on confirm and inserts an `<audio>`/`<embed>` node into the
+  WYSIWYG body; cipher snapshots before/after to extract the new URL, then
+  removes the inserted node so HTML-mode setContent stays in control
+- Site constraints: 5MB max, MP3 or WAV only
 
 ## Dependencies
 

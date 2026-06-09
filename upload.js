@@ -200,6 +200,7 @@ const {
     calculateChecksum,
     uploadImage
 } = require('./src/image');
+const { uploadAudio, AUDIO_CONSTRAINTS } = require('./src/audio');
 const { setLogger } = require('./src/logger');
 
 /**
@@ -653,6 +654,134 @@ function replaceLocalImages(html, pathMap, contentDir, rootDir) {
 }
 
 /**
+ * Find all local audio references in HTML.
+ * Matches <audio src=...>, <source src=...> and any src/href with an audio extension.
+ * @param {string} html - HTML content
+ * @param {string} contentPath - Page content path (file or directory)
+ * @param {string} rootPath - Root content directory (for "/"-prefixed paths)
+ * @returns {string[]} Array of absolute audio paths
+ */
+function findLocalAudio(html, contentPath, rootPath = null) {
+    const audios = [];
+    const notFound = [];
+    const audioExtensions = `(${AUDIO_CONSTRAINTS.allowedFormats.join('|')})`;
+
+    // src="..." attributes (covers <audio>, <source>, generic media tags)
+    const srcRegex = new RegExp(`src=["']([^"']+\\.${audioExtensions})["']`, 'gi');
+    // href="..." (covers <a href="..mp3">)
+    const hrefRegex = new RegExp(`href=["']([^"']+\\.${audioExtensions})["']`, 'gi');
+
+    const patterns = [srcRegex, hrefRegex];
+    const contentDir = fs.statSync(contentPath).isDirectory() ? contentPath : path.dirname(contentPath);
+    const rootDir = rootPath ? (fs.statSync(rootPath).isDirectory() ? rootPath : path.dirname(rootPath)) : contentDir;
+
+    for (const regex of patterns) {
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+            const src = match[1];
+            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//') || src.startsWith('data:')) {
+                continue;
+            }
+            const absPath = src.startsWith('/')
+                ? path.resolve(rootDir, src.slice(1))
+                : path.resolve(contentDir, src);
+            if (fs.existsSync(absPath)) {
+                audios.push(absPath);
+            } else {
+                notFound.push({ src: match[1], resolved: absPath });
+            }
+        }
+    }
+
+    if (notFound.length > 0) {
+        log.error(`오디오 파일을 찾을 수 없습니다:`);
+        for (const { src, resolved } of notFound) {
+            log.error(`  - ${src}`);
+            log.error(`    (resolved: ${resolved})`);
+        }
+        throw new Error(`${notFound.length}개의 오디오 파일을 찾을 수 없습니다.`);
+    }
+
+    return [...new Set(audios)];
+}
+
+/**
+ * Upload audios and update audio cache.
+ * @returns {Promise<{cache, pathMap, failures}>}
+ */
+async function uploadNewAudios(browser, page, audioPaths, audioCache) {
+    const updatedCache = { ...audioCache };
+    const pathMap = {};
+    let failures = 0;
+
+    for (const audioPath of audioPaths) {
+        const checksum = calculateChecksum(audioPath);
+
+        if (updatedCache[checksum]) {
+            log.verbose(`    [오디오] ${path.basename(audioPath)} (캐시됨)`);
+            pathMap[audioPath] = updatedCache[checksum];
+            continue;
+        }
+
+        log.verbose(`    [오디오] ${path.basename(audioPath)} 업로드 중...`);
+        const url = await withRetry(
+            () => uploadAudio(browser, page, audioPath),
+            `오디오 업로드: ${path.basename(audioPath)}`
+        );
+
+        if (url) {
+            const fullUrl = url.startsWith('/') ? `https://www.thelabyrinth.co.kr${url}` : url;
+            updatedCache[checksum] = fullUrl;
+            pathMap[audioPath] = fullUrl;
+            log.verbose(`    [오디오] 완료`);
+        } else {
+            log.error(`    [오디오] 실패: ${path.basename(audioPath)}`);
+            failures++;
+        }
+
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    return { cache: updatedCache, pathMap, failures };
+}
+
+/**
+ * Replace local audio paths in HTML with uploaded URLs.
+ * Mirrors replaceLocalImages but limited to audio extensions.
+ */
+function replaceLocalAudio(html, pathMap, contentDir, rootDir) {
+    const relMap = {};
+    for (const [absPath, url] of Object.entries(pathMap)) {
+        const rel = path.relative(rootDir, absPath).replace(/\\/g, '/');
+        relMap[rel] = url;
+    }
+
+    let result = html;
+    const audioExtensions = `(${AUDIO_CONSTRAINTS.allowedFormats.join('|')})`;
+    const srcRegex = new RegExp(`src=["']([^"']+\\.${audioExtensions})["']`, 'gi');
+    const hrefRegex = new RegExp(`href=["']([^"']+\\.${audioExtensions})["']`, 'gi');
+
+    function replacer(match, src) {
+        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('//') || src.startsWith('data:')) {
+            return match;
+        }
+        const absPath = src.startsWith('/')
+            ? path.resolve(rootDir, src.slice(1))
+            : path.resolve(contentDir, src);
+        const rel = path.relative(rootDir, absPath).replace(/\\/g, '/');
+        if (relMap[rel]) {
+            return match.replace(src, relMap[rel]);
+        }
+        return match;
+    }
+
+    result = result.replace(srcRegex, replacer);
+    result = result.replace(hrefRegex, replacer);
+
+    return result;
+}
+
+/**
  * Replace page paths with page IDs in ONLY-VIEW comments
  * e.g. <!-- ONLY-VIEW-START IN=[page/start] --> → <!-- ONLY-VIEW-START IN=[12345] -->
  * @param {string} html - Page HTML content
@@ -875,7 +1004,7 @@ async function main() {
     let browser, page;
 
     // Counters for final summary
-    const counts = { deleted: 0, created: 0, updated: 0, connected: 0, failures: { image: 0, page: 0, connect: 0 } };
+    const counts = { deleted: 0, created: 0, updated: 0, connected: 0, failures: { image: 0, audio: 0, page: 0, connect: 0 } };
 
     try {
         // Login with retry
@@ -926,6 +1055,7 @@ async function main() {
             labyMeta.id = labyrinthId;
             labyMeta.hash = currentHash;
             labyMeta.images = labyMeta.images || {};
+            labyMeta.audio = labyMeta.audio || {};
             labyMeta.pageIds = labyMeta.pageIds || [];
             fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
             log.item(`완료 (ID: ${labyrinthId})`);
@@ -945,6 +1075,7 @@ async function main() {
 
         const labyrinthId = labyMeta.id;
         let imageCache = labyMeta.images || {};
+        let audioCache = labyMeta.audio || {};
         let pageIds = labyMeta.pageIds || [];
 
         // Find all page files
@@ -966,9 +1097,10 @@ async function main() {
                 const json = readPageJson(contentPath, name);
                 const meta = readPageMeta(contentPath, name);
                 if (html && json) {
-                    // Calculate image checksums for change detection
+                    // Calculate image + audio checksums for change detection
                     const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
                     const localImages = findLocalImages(html, pageDir, contentPath);
+                    const localAudios = findLocalAudio(html, pageDir, contentPath);
 
                     // Also include explanation images in checksums
                     const answers = json.answers || [];
@@ -977,14 +1109,19 @@ async function main() {
                             try {
                                 const explImages = findLocalImages(ans.explanation, pageDir, contentPath);
                                 localImages.push(...explImages);
+                                const explAudios = findLocalAudio(ans.explanation, pageDir, contentPath);
+                                localAudios.push(...explAudios);
                             } catch (e) {
-                                // Ignore errors in explanation image detection for hash calculation
+                                // Ignore errors in explanation asset detection for hash calculation
                             }
                         }
                     }
 
-                    const imageChecksums = [...new Set(localImages)].map(imgPath => calculateChecksum(imgPath));
-                    pages[name] = { html, json, meta, hash: computePageHash(html, json, imageChecksums) };
+                    const assetChecksums = [
+                        ...[...new Set(localImages)].map(p => calculateChecksum(p)),
+                        ...[...new Set(localAudios)].map(p => calculateChecksum(p))
+                    ];
+                    pages[name] = { html, json, meta, hash: computePageHash(html, json, assetChecksums) };
                 }
                 metas[name] = meta;
             }
@@ -1290,22 +1427,25 @@ async function main() {
                     '페이지 편집 화면 이동'
                 );
 
-                // Find and upload images (content + explanation images BEFORE fillPageForm)
+                // Find and upload assets (content + explanation BEFORE fillPageForm)
                 const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
                 const localImages = findLocalImages(html, pageDir, contentPath);
+                const localAudios = findLocalAudio(html, pageDir, contentPath);
 
                 const isFirst = (firstPage === name);
                 const isEnding = pageData.is_ending || false;
                 const answers = pageData.answers || [];
                 const hasAnswers = answers.length > 0;
 
-                // Prepare explanation HTML with images (collect all images first)
+                // Prepare explanation HTML with assets (collect all first)
                 const processedAnswers = [];
                 for (const ans of answers) {
                     let explanationHtml = ans.explanation || '';
                     if (explanationHtml && explanationHtml.includes('<')) {
                         const explImages = findLocalImages(explanationHtml, pageDir, contentPath);
                         localImages.push(...explImages);
+                        const explAudios = findLocalAudio(explanationHtml, pageDir, contentPath);
+                        localAudios.push(...explAudios);
                     }
                     processedAnswers.push({ ...ans, explanationHtml });
                 }
@@ -1332,8 +1472,29 @@ async function main() {
                     }
                 }
 
-                // Navigate again only if images were uploaded (upload popup changes page state)
-                if (localImages.length > 0) {
+                // Upload all audio (after images; same navigated editor instance)
+                let pageAudioFailures = 0;
+                if (localAudios.length > 0) {
+                    log.verbose(`    오디오 ${localAudios.length}개 처리 중...`);
+                    const { cache: newCache, pathMap, failures: audioFailures } = await uploadNewAudios(browser, page, localAudios, audioCache);
+                    pageAudioFailures = audioFailures;
+                    counts.failures.audio = (counts.failures.audio || 0) + audioFailures;
+                    audioCache = newCache;
+
+                    labyMeta.audio = audioCache;
+                    fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
+
+                    html = replaceLocalAudio(html, pathMap, pageDir, contentPath);
+
+                    for (const ans of processedAnswers) {
+                        if (ans.explanationHtml) {
+                            ans.explanationHtml = replaceLocalAudio(ans.explanationHtml, pathMap, pageDir, contentPath);
+                        }
+                    }
+                }
+
+                // Navigate again only if any asset was uploaded (popups change page state)
+                if (localImages.length > 0 || localAudios.length > 0) {
                     await withRetry(
                         () => navigateToEditPage(page, labyrinthId, pageId),
                         '페이지 편집 화면 이동'
@@ -1520,7 +1681,8 @@ async function main() {
         if (counts.updated > 0) summaryParts.push(`수정 ${counts.updated}`);
         if (counts.connected > 0) summaryParts.push(`연결 ${counts.connected}`);
 
-        const totalFailures = counts.failures.image + counts.failures.page + counts.failures.connect;
+        const audioFailures = counts.failures.audio || 0;
+        const totalFailures = counts.failures.image + audioFailures + counts.failures.page + counts.failures.connect;
         if (summaryParts.length > 0 || totalFailures > 0) {
             log.info(`업로드 완료! (${summaryParts.join(', ') || '변경 없음'})`);
         } else {
@@ -1530,6 +1692,7 @@ async function main() {
         if (totalFailures > 0) {
             const failParts = [];
             if (counts.failures.image > 0) failParts.push(`이미지 ${counts.failures.image}`);
+            if (audioFailures > 0) failParts.push(`오디오 ${audioFailures}`);
             if (counts.failures.page > 0) failParts.push(`페이지 ${counts.failures.page}`);
             if (counts.failures.connect > 0) failParts.push(`연결 ${counts.failures.connect}`);
             log.error(`  실패: ${failParts.join(', ')} (다음 실행 시 재시도됨)`);
@@ -1538,6 +1701,7 @@ async function main() {
         log.verbose(`  미궁 ID: ${labyrinthId}`);
         log.verbose(`  총 페이지: ${Object.keys(pages).length}개`);
         log.verbose(`  이미지 캐시: ${Object.keys(imageCache).length}개`);
+        log.verbose(`  오디오 캐시: ${Object.keys(audioCache).length}개`);
 
     } catch (error) {
         log.error('');
