@@ -201,6 +201,7 @@ const {
     uploadImage
 } = require('./src/image');
 const { uploadAudio, AUDIO_CONSTRAINTS } = require('./src/audio');
+const { minifyHtml } = require('./src/minify');
 const { setLogger } = require('./src/logger');
 
 /**
@@ -1504,6 +1505,17 @@ async function main() {
                 // Replace visit paths with page IDs
                 html = replaceVisitPaths(html, pageIdMap);
                 html = replaceGoPagePaths(html, pageIdMap);
+
+                // Strip comments + collapse CSS whitespace before uploading so
+                // viewers of the live page source see as little structure as
+                // possible. Safe transforms only — does not touch text content
+                // or rename selectors (design system depends on those).
+                html = minifyHtml(html);
+                for (const ans of processedAnswers) {
+                    if (ans.explanationHtml) {
+                        ans.explanationHtml = minifyHtml(ans.explanationHtml);
+                    }
+                }
 
                 await fillPageForm(page, {
                     title: pageData.title,
