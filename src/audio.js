@@ -51,43 +51,83 @@ function validateAudio(filePath) {
 }
 
 /**
- * Read the current set of audio-like sources in the SmartEditor2 WYSIWYG
- * area. Used to diff before/after the upload to identify the inserted node.
+ * Scan the editor frame (its document, all nested iframes, and the
+ * HTML-mode syntax textarea) for any element/attribute referencing an
+ * .mp3 / .wav file. Returns a flat array of URLs.
+ *
+ * We deliberately cast a wide net because SmartEditor2 may render the
+ * inserted audio as <audio>, <embed>, <a href>, or inside the WYSIWYG
+ * iframe — and pre-existing img buttons (btn_confirm.png etc.) must be
+ * excluded.
  */
-async function snapshotEditorAudio(editorFrame) {
+async function scanEditorAudio(editorFrame) {
     return await editorFrame.evaluate(() => {
-        const area = document.querySelector('.se2_input_wysiwyg');
-        if (!area) return [];
-        const nodes = area.querySelectorAll('audio, embed, source, a');
+        const isAudio = (s) => s && /\.(mp3|wav)(\?[^"']*)?$/i.test(s);
         const sources = [];
-        for (const n of nodes) {
-            const src = n.getAttribute('src') || n.getAttribute('href') || '';
-            if (src && /\.(mp3|wav)(\?.*)?$/i.test(src)) sources.push(src);
+
+        const harvest = (root) => {
+            if (!root) return;
+            const nodes = root.querySelectorAll('audio, embed, source, a, object, [src], [href], [data-src]');
+            for (const n of nodes) {
+                const candidates = [
+                    n.getAttribute && n.getAttribute('src'),
+                    n.getAttribute && n.getAttribute('href'),
+                    n.getAttribute && n.getAttribute('data-src')
+                ];
+                for (const s of candidates) if (isAudio(s)) sources.push(s);
+            }
+        };
+
+        // 1. Editor document body
+        harvest(document.body);
+        // 2. Any nested iframes (WYSIWYG body usually lives in one)
+        for (const f of document.querySelectorAll('iframe')) {
+            try {
+                const doc = f.contentDocument || (f.contentWindow && f.contentWindow.document);
+                if (doc && doc.body) harvest(doc.body);
+            } catch (e) { /* cross-origin or not ready */ }
+        }
+        // 3. HTML-mode syntax textarea (if SE2 is currently in HTML mode)
+        const syntax = document.querySelector('.se2_input_syntax');
+        if (syntax && syntax.value) {
+            const re = /(?:src|href)=["']([^"']+\.(?:mp3|wav)(?:\?[^"']*)?)["']/gi;
+            let m;
+            while ((m = re.exec(syntax.value)) !== null) sources.push(m[1]);
         }
         return sources;
     });
 }
 
 /**
- * Remove the inserted audio node(s) so the editor stays clean for the
- * later HTML-mode setContent. We only remove nodes whose src matches one
- * of the freshly-added URLs.
+ * Try to parse an audio URL out of a server response body.
+ * SmartEditor2 attach_audio.js typically returns something with the
+ * uploaded path in a JS variable or as part of an embed/audio snippet.
  */
-async function removeInsertedAudio(editorFrame, newSrcs) {
-    if (!newSrcs || newSrcs.length === 0) return;
-    await editorFrame.evaluate((srcs) => {
-        const area = document.querySelector('.se2_input_wysiwyg');
-        if (!area) return;
-        const matches = (el) => {
-            const s = el.getAttribute('src') || el.getAttribute('href') || '';
-            return srcs.includes(s);
-        };
-        for (const sel of ['audio', 'embed', 'source', 'a']) {
-            for (const el of Array.from(area.querySelectorAll(sel))) {
-                if (matches(el)) el.remove();
-            }
-        }
-    }, newSrcs);
+function extractAudioUrlFromBody(text) {
+    if (!text) return null;
+    const patterns = [
+        /['"]([^'"\s<>]+\.(?:mp3|wav)(?:\?[^'"]*)?)['"]/i,
+        /filePath\s*[:=]\s*['"]([^'"]+)['"]/i,
+        /sFileName\s*[:=]\s*['"]([^'"]+)['"]/i
+    ];
+    for (const p of patterns) {
+        const m = text.match(p);
+        if (m && m[1] && /\.(mp3|wav)/i.test(m[1])) return m[1];
+    }
+    return null;
+}
+
+/**
+ * Normalize an extracted path to a site-absolute URL.
+ * SmartEditor2 sometimes hands back filesystem paths like
+ * /home/labyrinth/tomcat6/webapps/labyrinth/... which must be rewritten
+ * to /labyrinth/... to be reachable from the public site.
+ */
+function normalizeAudioUrl(url) {
+    if (!url) return url;
+    let u = url;
+    u = u.replace('/home/labyrinth/tomcat6/webapps/labyrinth', '/labyrinth');
+    return u;
 }
 
 /**
@@ -119,7 +159,7 @@ async function uploadAudio(browser, page, audioPath) {
     }
 
     // Snapshot existing audio refs to diff after upload.
-    const before = await snapshotEditorAudio(editorFrame);
+    const before = await scanEditorAudio(editorFrame);
 
     const audioBtn = await editorFrame.$('button.se2_audio');
     if (!audioBtn) {
@@ -155,6 +195,26 @@ async function uploadAudio(browser, page, audioPath) {
 
     let audioUrl = null;
 
+    // Listen for the upload response body. The most reliable URL source is
+    // the network response from the upload endpoint itself; the editor scan
+    // below is a fallback in case SmartEditor2 puts the audio somewhere
+    // we did not anticipate.
+    let networkUrl = null;
+    const responseHandler = async (response) => {
+        try {
+            const respUrl = response.url();
+            // Skip only obvious static assets; everything else is fair game
+            // because the upload endpoint URL is undocumented and the
+            // response could come back as text/html, text/xml, JSON, plain
+            // text, or even no content-type.
+            if (/\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|otf|css)(\?|$)/i.test(respUrl)) return;
+            const text = await response.text();
+            const found = extractAudioUrlFromBody(text);
+            if (found && !networkUrl) networkUrl = normalizeAudioUrl(found);
+        } catch (e) { /* response may not be readable */ }
+    };
+    popupPage.on('response', responseHandler);
+
     try {
         const fileInput = await popupPage.$('#uploadInputBox');
         if (!fileInput) {
@@ -164,17 +224,14 @@ async function uploadAudio(browser, page, audioPath) {
             return null;
         }
         await fileInput.uploadFile(tempPath);
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 400)); // let the file fully attach
 
-        // Confirm button is an <a> wrapping <img id="btn_confirm">. Click via JS
-        // to dispatch on whichever element actually has the onclick handler.
+        // Confirm button is <a href="#"><img id="btn_confirm"></a>. Use
+        // Puppeteer's native click (real mouse events) so Jindo's mousedown/
+        // mouseup-bound handler fires; a synthetic .click() in evaluate()
+        // bubbles but does not always trigger framework-level handlers.
         const closeWatcher = new Promise(resolve => popupPage.once('close', resolve));
-        await popupPage.evaluate(() => {
-            const img = document.querySelector('#btn_confirm');
-            if (!img) return;
-            const link = img.closest('a');
-            (link || img).click();
-        });
+        await popupPage.click('#btn_confirm');
 
         // Popup closes itself after a successful upload.
         await Promise.race([
@@ -182,19 +239,26 @@ async function uploadAudio(browser, page, audioPath) {
             new Promise(r => setTimeout(r, 30000))
         ]);
 
-        // Give the editor a tick to receive the inserted node.
-        await new Promise(r => setTimeout(r, 400));
+        // Poll for the URL: network response first, then editor scan. The
+        // editor insertion can lag the popup close by up to a couple seconds
+        // on slower hosts, so retry across ~6 seconds before giving up.
+        const pollStart = Date.now();
+        while (Date.now() - pollStart < 6000) {
+            if (networkUrl) { audioUrl = networkUrl; break; }
+            const after = await scanEditorAudio(editorFrame);
+            const fresh = after.filter(s => !before.includes(s));
+            if (fresh.length > 0) {
+                audioUrl = normalizeAudioUrl(fresh[0]);
+                break;
+            }
+            await new Promise(r => setTimeout(r, 400));
+        }
 
-        const after = await snapshotEditorAudio(editorFrame);
-        const fresh = after.filter(s => !before.includes(s));
-        if (fresh.length === 0) {
+        if (!audioUrl) {
             log.fail('업로드된 오디오 URL을 에디터에서 찾지 못했습니다');
-        } else {
-            audioUrl = fresh[0];
-            // Remove inserted node(s) so HTML-mode setContent stays in control.
-            await removeInsertedAudio(editorFrame, fresh);
         }
     } finally {
+        try { popupPage.off('response', responseHandler); } catch (e) {}
         try { if (!popupPage.isClosed()) await popupPage.close(); } catch (e) {}
         try { fs.unlinkSync(tempPath); } catch (e) {}
     }
