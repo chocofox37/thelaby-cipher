@@ -194,6 +194,7 @@ const {
     getPageList,
     setParentConnection,
     clearParentConnections,
+    getParentConnections,
     deletePage,
     setEditorContent
 } = require('./src/page');
@@ -1757,7 +1758,27 @@ async function main() {
                 await new Promise(r => setTimeout(r, 50));
             }
 
+            // Verify a desired connection actually persisted on the child: a checked
+            // checkbox for the parent whose label answer-part matches the source answer
+            // (label-first, mirroring setParentConnection), or the index value as fallback.
+            const connectionPersisted = (live, src) => live.some(c => {
+                if (!c.checked) return false;
+                if (String(c.parentPageId) !== String(src.fromPageId)) return false;
+                const label = c.label || '';
+                const sep = label.lastIndexOf(':');
+                const answerPart = (sep >= 0 ? label.slice(sep + 1) : label).trim();
+                if (src.answer && answerPart === src.answer) return true;
+                return c.answerIndex === src.answerIndex;
+            });
+
             // Phase 2: set the desired connections on every target child (slots now free).
+            // After saving, RE-READ the child's connections to verify the save actually
+            // persisted: the site occasionally drops a checkbox save under load, and a
+            // click+submit alone can't detect that (the click "succeeds" client-side, so
+            // an unverified run reports 연결 OK while the link is silently gone). Retry the
+            // still-missing links a few times, then report any that never took as a real
+            // failure (counted + hash cleared so the next run retries).
+            const MAX_CONNECT_ATTEMPTS = 3;
             for (let i = 0; i < targetPages.length; i++) {
                 const targetPageId = targetPages[i];
                 const sources = connections[targetPageId];
@@ -1765,46 +1786,62 @@ async function main() {
 
                 log.progress(i + 1, targetPages.length, targetName);
 
-                await withRetry(
-                    () => navigateToEditPage(page, labyrinthId, targetPageId),
-                    '페이지 편집 화면 이동'
-                );
+                let missing = sources.slice();
+                for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS && missing.length > 0; attempt++) {
+                    await withRetry(
+                        () => navigateToEditPage(page, labyrinthId, targetPageId),
+                        '페이지 편집 화면 이동'
+                    );
 
-                let connectionSuccess = true;
-                for (const src of sources) {
-                    // Pass answer text so setParentConnection matches the checkbox by
-                    // label first (robust to slot reordering); index is the fallback.
-                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex, src.answer);
-                    if (success) {
-                        log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
-                    } else {
-                        log.verbose(`    <- ${src.fromName} [실패]`);
-                        connectionSuccess = false;
-                        counts.failures.connect++;
+                    // Set only the still-missing links; already-persisted ones load
+                    // pre-checked and are preserved by the submit.
+                    for (const src of missing) {
+                        // Pass answer text so setParentConnection matches the checkbox by
+                        // label first (robust to slot reordering); index is the fallback.
+                        const success = await setParentConnection(page, src.fromPageId, src.answerIndex, src.answer);
+                        log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]${success ? '' : ' (체크 실패)'}`);
+                    }
+
+                    // Re-set HTML content to overwrite any changes made by SmartEditor.
+                    if (pages[targetName] && !pages[targetName].finalHtml && pages[targetName].html) {
+                        const rebuilt = await buildPageContent(targetName);
+                        pages[targetName].finalHtml = rebuilt.html;
+                    }
+                    const finalHtml = pages[targetName]?.finalHtml;
+                    if (finalHtml) {
+                        await setEditorContent(page, finalHtml);
+                    }
+
+                    await withRetry(
+                        () => submitPageForm(page),
+                        '페이지 저장'
+                    );
+
+                    // Re-read the freshly-persisted server state and recompute what's missing.
+                    await withRetry(
+                        () => navigateToEditPage(page, labyrinthId, targetPageId),
+                        '페이지 편집 화면 이동(검증)'
+                    );
+                    const live = await getParentConnections(page);
+                    missing = sources.filter(src => !connectionPersisted(live, src));
+                    if (missing.length > 0 && attempt < MAX_CONNECT_ATTEMPTS) {
+                        log.verbose(`    검증: 미반영 ${missing.length}개 → 재시도 ${attempt + 1}/${MAX_CONNECT_ATTEMPTS}`);
                     }
                 }
 
-                // Re-set HTML content to overwrite any changes made by SmartEditor.
-                if (pages[targetName] && !pages[targetName].finalHtml && pages[targetName].html) {
-                    const rebuilt = await buildPageContent(targetName);
-                    pages[targetName].finalHtml = rebuilt.html;
-                }
-                const finalHtml = pages[targetName]?.finalHtml;
-                if (finalHtml) {
-                    await setEditorContent(page, finalHtml);
-                }
-
-                await withRetry(
-                    () => submitPageForm(page),
-                    '페이지 저장'
-                );
-                if (connectionSuccess) {
+                if (missing.length === 0) {
                     counts.connected++;
-                } else if (pages[targetName]) {
-                    // Clear hash so next run retries this page
-                    const targetMeta = pages[targetName].meta;
-                    delete targetMeta.hash;
-                    writePageMeta(contentPath, targetName, targetMeta);
+                } else {
+                    for (const m of missing) {
+                        log.error(`    연결 미반영: ${targetName} <- ${m.fromName} [정답: ${m.answer}]`);
+                        counts.failures.connect++;
+                    }
+                    if (pages[targetName]) {
+                        // Clear hash so next run retries this page
+                        const targetMeta = pages[targetName].meta;
+                        delete targetMeta.hash;
+                        writePageMeta(contentPath, targetName, targetMeta);
+                    }
                 }
                 await new Promise(r => setTimeout(r, 50));
             }
