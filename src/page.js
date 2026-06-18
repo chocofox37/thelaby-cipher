@@ -551,14 +551,19 @@ async function getPageList(page, labyrinthId) {
  * @returns {Promise<boolean>} Success
  */
 async function setParentConnection(page, parentPageId, answerIndex = 1, answerText = '') {
-    // First try: match by answer text in checkbox label (reliable regardless of site ordering)
+    // First try: match by answer text in checkbox label (reliable regardless of site ordering).
+    // Label format is "정답N : <answer text>". Compare the answer portion EXACTLY — a
+    // substring check would let "택1" wrongly match the "택10" slot.
     if (answerText) {
         const matched = await page.evaluate((parentId, text) => {
             const checkboxes = document.querySelectorAll('input[name="prevQuestCheckList"]');
             for (const cb of checkboxes) {
                 if (!cb.value.startsWith(parentId + '-')) continue;
                 const label = cb.parentElement?.textContent?.trim() || '';
-                if (label.includes(text)) {
+                // Take the text after the last ":" (the answer), trimmed.
+                const sep = label.lastIndexOf(':');
+                const answerPart = (sep >= 0 ? label.slice(sep + 1) : label).trim();
+                if (answerPart === text) {
                     return cb.value;
                 }
             }

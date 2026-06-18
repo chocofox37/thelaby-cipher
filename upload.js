@@ -826,6 +826,39 @@ function replaceGoPagePaths(html, pageIdMap) {
 }
 
 /**
+ * Collect page-name references in HTML content.
+ * Looks inside ONLY-VIEW conditions (IN/INOR/EX/EXOR=[...]) and goPage('path') calls.
+ * Numeric values (already-resolved IDs) are ignored.
+ * @param {string} html - Page HTML content
+ * @returns {string[]} - Unique referenced page names (non-numeric paths)
+ */
+function findContentPageRefs(html) {
+    const refs = new Set();
+    if (!html) return [];
+
+    // ONLY-VIEW conditions
+    const onlyView = html.match(/<!--\s*ONLY-VIEW-START\s+(.*?)\s*-->/g) || [];
+    for (const block of onlyView) {
+        const condMatches = block.matchAll(/(?:IN|INOR|EX|EXOR)=\[([^\]]*)\]/g);
+        for (const m of condMatches) {
+            m[1].split(',').forEach(v => {
+                const t = v.trim();
+                if (t && !/^\d+$/.test(t)) refs.add(t);
+            });
+        }
+    }
+
+    // goPage('path')
+    const goPage = html.matchAll(/goPage\('([^']+)'\)/g);
+    for (const m of goPage) {
+        const t = m[1].trim();
+        if (t && !/^\d+$/.test(t)) refs.add(t);
+    }
+
+    return [...refs];
+}
+
+/**
  * Escape special regex characters
  */
 function escapeRegex(str) {
@@ -1324,9 +1357,93 @@ async function main() {
             }
         }
 
+        // Build page name -> ID mapping. Starts with already-known IDs (existing pages)
+        // and grows as new pages are created in Step 4, so a new page's content can
+        // resolve references to other pages that were created earlier in the same run.
+        const pageIdMap = {};
+        for (const [name, pageInfo] of Object.entries(pages)) {
+            if (pageInfo.meta.id) {
+                pageIdMap[name] = pageInfo.meta.id;
+            }
+        }
+
+        // Shared content pipeline. The editor for `name` must already be navigated
+        // (create screen for new pages, edit screen for updates) — asset uploads run
+        // against that editor. Returns processed HTML + answers, asset failures, and
+        // any page references that could NOT be resolved with the CURRENT pageIdMap
+        // (caller re-edits those once all IDs exist).
+        async function buildPageContent(name) {
+            const pageData = pages[name].json;
+            let html = pages[name].html;
+            const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
+
+            const localImages = findLocalImages(html, pageDir, contentPath);
+            const localAudios = findLocalAudio(html, pageDir, contentPath);
+
+            const answers = pageData.answers || [];
+            const processedAnswers = [];
+            for (const ans of answers) {
+                let explanationHtml = ans.explanation || '';
+                if (explanationHtml && explanationHtml.includes('<')) {
+                    localImages.push(...findLocalImages(explanationHtml, pageDir, contentPath));
+                    localAudios.push(...findLocalAudio(explanationHtml, pageDir, contentPath));
+                }
+                processedAnswers.push({ ...ans, explanationHtml });
+            }
+
+            let imageFailures = 0;
+            if (localImages.length > 0) {
+                log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
+                const { cache: newCache, pathMap, failures } = await uploadNewImages(browser, page, localImages, imageCache);
+                imageFailures = failures;
+                counts.failures.image += failures;
+                imageCache = newCache;
+                labyMeta.images = imageCache;
+                fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
+                html = replaceLocalImages(html, pathMap, pageDir, contentPath);
+                for (const ans of processedAnswers) {
+                    if (ans.explanationHtml) ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap, pageDir, contentPath);
+                }
+            }
+
+            let audioFailures = 0;
+            if (localAudios.length > 0) {
+                log.verbose(`    오디오 ${localAudios.length}개 처리 중...`);
+                const { cache: newCache, pathMap, failures } = await uploadNewAudios(browser, page, localAudios, audioCache);
+                audioFailures = failures;
+                counts.failures.audio = (counts.failures.audio || 0) + failures;
+                audioCache = newCache;
+                labyMeta.audio = audioCache;
+                fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
+                html = replaceLocalAudio(html, pathMap, pageDir, contentPath);
+                for (const ans of processedAnswers) {
+                    if (ans.explanationHtml) ans.explanationHtml = replaceLocalAudio(ans.explanationHtml, pathMap, pageDir, contentPath);
+                }
+            }
+
+            // Which page references can't be resolved yet (target ID not in map)?
+            const unresolvedRefs = findContentPageRefs(html).filter(ref => !pageIdMap[ref]);
+
+            // Resolve the references we can; minify.
+            html = replaceVisitPaths(html, pageIdMap);
+            html = replaceGoPagePaths(html, pageIdMap);
+            html = minifyHtml(html);
+            for (const ans of processedAnswers) {
+                if (ans.explanationHtml) ans.explanationHtml = minifyHtml(ans.explanationHtml);
+            }
+
+            return {
+                html, processedAnswers, imageFailures, audioFailures, unresolvedRefs,
+                assetsUploaded: localImages.length > 0 || localAudios.length > 0,
+            };
+        }
+
         // ============================================================
-        // Step 4: Create new pages (dummy content for ID allocation)
+        // Step 4: Create new pages with real content + answers (single save).
+        // Pages whose content references a not-yet-created page are flagged for a
+        // content re-edit in Step 5 (once all IDs exist).
         // ============================================================
+        const pagesNeedingReEdit = new Set();
         log.info('');
         log.section(4, 6, '페이지 생성');
         if (newPages.length > 0) {
@@ -1335,28 +1452,58 @@ async function main() {
                 const pageData = pages[name].json;
                 log.progress(i + 1, newPages.length, `${name}: ${pageData.title}`);
 
+                if (!pages[name].html) {
+                    log.error(`    HTML 내용이 없습니다`);
+                    counts.failures.page++;
+                    continue;
+                }
+
                 await withRetry(
                     () => navigateToCreatePage(page, labyrinthId),
                     '페이지 생성 화면 이동'
                 );
 
+                // Build content against the create-screen editor (asset upload needs
+                // the editor present; it works before the page has an ID).
+                const built = await buildPageContent(name);
+
+                // If assets were uploaded, popups may have disturbed the create form —
+                // re-navigate and rebuild URLs are already in `built.html`.
+                if (built.assetsUploaded) {
+                    await withRetry(
+                        () => navigateToCreatePage(page, labyrinthId),
+                        '페이지 생성 화면 이동'
+                    );
+                }
+
+                const isFirst = (firstPage === name);
+                const isEnding = pageData.is_ending || false;
+                const answers = pageData.answers || [];
+                const hasAnswers = answers.length > 0;
+
                 await fillPageForm(page, {
                     title: pageData.title,
-                    bgColor: '#000000',
-                    isFirst: false,
-                    isEnding: false,
-                    hasAnswers: true,
-                    hint: '',
-                    hint_enabled: false,
-                    content: '.'
+                    bgColor: pageData.background_color || '#000000',
+                    isFirst,
+                    isEnding,
+                    hasAnswers,
+                    hint: pageData.hint || '',
+                    hint_enabled: pageData.hint_enabled || false,
+                    content: built.html,
                 });
 
-                // Add N dummy answer slots so server assigns route values.
-                // Step 5 overwrites the text with real answers + reorders via route.
-                // Unique dummy text avoids server-side dedupe.
-                const dummyCount = Math.max(1, (pageData.answers || []).length);
-                for (let d = 0; d < dummyCount; d++) {
-                    await addAnswer(page, `__dummy${d + 1}`, false, '');
+                // Add real answers via pure UI in order — the server assigns route
+                // 1..N by DOM order (verified), so no hidden-field manipulation needed.
+                let answerFailures = 0;
+                for (let j = 0; j < built.processedAnswers.length; j++) {
+                    const ans = built.processedAnswers[j];
+                    const result = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml || '');
+                    if (result !== 'filled') {
+                        log.fail(`    답안 추가 실패(슬롯 ${j + 1}): ${result}`);
+                        answerFailures++;
+                    } else {
+                        log.verbose(`    슬롯 ${j + 1}: "${ans.answer}"`);
+                    }
                 }
 
                 const pageId = await withRetry(
@@ -1366,10 +1513,27 @@ async function main() {
 
                 if (pageId) {
                     pages[name].meta.id = pageId;
-                    writePageMeta(contentPath, name, pages[name].meta);
+                    pageIdMap[name] = pageId;
+                    pages[name].finalHtml = built.html;
 
                     if (!pageIds.includes(pageId)) {
                         pageIds.push(pageId);
+                    }
+
+                    // Persist meta now (so a later crash doesn't orphan the page).
+                    // Skip hash if anything failed or a re-edit is pending, so next run retries.
+                    pages[name].meta.is_first = isFirst;
+                    pages[name].meta.is_ending = isEnding;
+                    pages[name].meta.answers = answers.map(a => a.answer);
+                    const clean = built.imageFailures === 0 && built.audioFailures === 0 && answerFailures === 0;
+                    if (clean && built.unresolvedRefs.length === 0) {
+                        pages[name].meta.hash = pages[name].hash;
+                    }
+                    writePageMeta(contentPath, name, pages[name].meta);
+
+                    if (built.unresolvedRefs.length > 0) {
+                        pagesNeedingReEdit.add(name);
+                        log.verbose(`    재에디팅 예약 (미해결 참조: ${built.unresolvedRefs.join(', ')})`);
                     }
 
                     counts.created++;
@@ -1387,191 +1551,86 @@ async function main() {
             log.item('생성할 페이지 없음');
         }
 
-        // Build page name -> ID mapping (all IDs now available)
-        const pageIdMap = {};
-        for (const [name, pageInfo] of Object.entries(pages)) {
-            if (pageInfo.meta.id) {
-                pageIdMap[name] = pageInfo.meta.id;
-            }
-        }
-
-        // Update pages: newly created (with real content) + modified (non-recreate only)
+        // Pages that get a content (re-)write in Step 5:
+        //  - in-place updated pages (changed content, unchanged answers)
+        //  - new pages flagged for re-edit (content referenced a page created later)
+        // New pages NOT in pagesNeedingReEdit already have final content + answers
+        // from Step 4, so they are skipped here (saving one form submit each).
+        const pagesToReEdit = [
+            ...newPages.filter(name => pages[name].meta.id && pagesNeedingReEdit.has(name)),
+            ...pagesToUpdateInPlace,
+        ];
+        // pagesToUpdate = every page whose content we (re)wrote this run. Step 6 uses
+        // it to decide which sources' connections to re-establish.
         const pagesToUpdate = [
             ...newPages.filter(name => pages[name].meta.id),
-            ...pagesToUpdateInPlace
+            ...pagesToUpdateInPlace,
         ];
 
         log.info('');
         log.section(5, 6, '페이지 수정');
-        if (pagesToUpdate.length > 0) {
+        if (pagesToReEdit.length > 0) {
 
-            for (let i = 0; i < pagesToUpdate.length; i++) {
-                const name = pagesToUpdate[i];
+            for (let i = 0; i < pagesToReEdit.length; i++) {
+                const name = pagesToReEdit[i];
                 const pageData = pages[name].json;
                 const pageMeta = pages[name].meta;
                 const pageId = pageMeta.id;
 
                 if (!pageId) continue;
 
-                log.progress(i + 1, pagesToUpdate.length, `${name}: ${pageData.title}`);
+                log.progress(i + 1, pagesToReEdit.length, `${name}: ${pageData.title}`);
 
-                // Read HTML content
-                let html = pages[name].html;
-                if (!html) {
+                if (!pages[name].html) {
                     log.error(`    HTML 내용이 없습니다`);
                     continue;
                 }
 
-                // Navigate to editor first (for image upload)
+                // Navigate to the edit screen first (assets + content go here).
                 await withRetry(
                     () => navigateToEditPage(page, labyrinthId, pageId),
                     '페이지 편집 화면 이동'
                 );
 
-                // Find and upload assets (content + explanation BEFORE fillPageForm)
-                const pageDir = path.dirname(path.join(contentPath, `${name}.html`));
-                const localImages = findLocalImages(html, pageDir, contentPath);
-                const localAudios = findLocalAudio(html, pageDir, contentPath);
+                const built = await buildPageContent(name);
 
-                const isFirst = (firstPage === name);
-                const isEnding = pageData.is_ending || false;
-                const answers = pageData.answers || [];
-                const hasAnswers = answers.length > 0;
-
-                // Prepare explanation HTML with assets (collect all first)
-                const processedAnswers = [];
-                for (const ans of answers) {
-                    let explanationHtml = ans.explanation || '';
-                    if (explanationHtml && explanationHtml.includes('<')) {
-                        const explImages = findLocalImages(explanationHtml, pageDir, contentPath);
-                        localImages.push(...explImages);
-                        const explAudios = findLocalAudio(explanationHtml, pageDir, contentPath);
-                        localAudios.push(...explAudios);
-                    }
-                    processedAnswers.push({ ...ans, explanationHtml });
-                }
-
-                // Upload all images at once (before editor content is set)
-                let pageImageFailures = 0;
-                if (localImages.length > 0) {
-                    log.verbose(`    이미지 ${localImages.length}개 처리 중...`);
-                    const { cache: newCache, pathMap, failures: imageFailures } = await uploadNewImages(browser, page, localImages, imageCache);
-                    pageImageFailures = imageFailures;
-                    counts.failures.image += imageFailures;
-                    imageCache = newCache;
-
-                    labyMeta.images = imageCache;
-                    fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-
-                    html = replaceLocalImages(html, pathMap, pageDir, contentPath);
-
-                    // Replace images in explanation HTML too
-                    for (const ans of processedAnswers) {
-                        if (ans.explanationHtml) {
-                            ans.explanationHtml = replaceLocalImages(ans.explanationHtml, pathMap, pageDir, contentPath);
-                        }
-                    }
-                }
-
-                // Upload all audio (after images; same navigated editor instance)
-                let pageAudioFailures = 0;
-                if (localAudios.length > 0) {
-                    log.verbose(`    오디오 ${localAudios.length}개 처리 중...`);
-                    const { cache: newCache, pathMap, failures: audioFailures } = await uploadNewAudios(browser, page, localAudios, audioCache);
-                    pageAudioFailures = audioFailures;
-                    counts.failures.audio = (counts.failures.audio || 0) + audioFailures;
-                    audioCache = newCache;
-
-                    labyMeta.audio = audioCache;
-                    fs.writeFileSync(metaPath, JSON.stringify(labyMeta, null, 4) + '\n', 'utf8');
-
-                    html = replaceLocalAudio(html, pathMap, pageDir, contentPath);
-
-                    for (const ans of processedAnswers) {
-                        if (ans.explanationHtml) {
-                            ans.explanationHtml = replaceLocalAudio(ans.explanationHtml, pathMap, pageDir, contentPath);
-                        }
-                    }
-                }
-
-                // Navigate again only if any asset was uploaded (popups change page state)
-                if (localImages.length > 0 || localAudios.length > 0) {
+                // Asset popups can disturb the edit form — re-navigate if needed.
+                if (built.assetsUploaded) {
                     await withRetry(
                         () => navigateToEditPage(page, labyrinthId, pageId),
                         '페이지 편집 화면 이동'
                     );
                 }
 
-                // Replace visit paths with page IDs
-                html = replaceVisitPaths(html, pageIdMap);
-                html = replaceGoPagePaths(html, pageIdMap);
-
-                // Strip comments + collapse CSS whitespace before uploading so
-                // viewers of the live page source see as little structure as
-                // possible. Safe transforms only — does not touch text content
-                // or rename selectors (design system depends on those).
-                html = minifyHtml(html);
-                for (const ans of processedAnswers) {
-                    if (ans.explanationHtml) {
-                        ans.explanationHtml = minifyHtml(ans.explanationHtml);
-                    }
+                if (built.unresolvedRefs.length > 0) {
+                    // Should not happen after all IDs exist; warn so it's visible.
+                    log.error(`    여전히 미해결 참조: ${built.unresolvedRefs.join(', ')}`);
                 }
 
+                const isFirst = (firstPage === name);
+                const isEnding = pageData.is_ending || false;
+                const hasAnswers = (pageData.answers || []).length > 0;
+
+                // Re-inject content only. Answers already exist on the page (new pages
+                // got them in Step 4; in-place pages never changed their answers), so we
+                // do not touch answer rows here.
                 await fillPageForm(page, {
                     title: pageData.title,
                     bgColor: pageData.background_color || '#000000',
-                    isFirst: isFirst,
-                    isEnding: isEnding,
-                    hasAnswers: hasAnswers,
+                    isFirst,
+                    isEnding,
+                    hasAnswers,
                     hint: pageData.hint || '',
                     hint_enabled: pageData.hint_enabled || false,
-                    content: html
+                    content: built.html,
                 });
-
-                // Add answers (only for new/recreated pages — update-in-place pages already have correct answers)
-                let answerFailures = 0;
-                const isNewPage = newPages.includes(name);
-                if (hasAnswers && isNewPage) {
-                    // For new pages, Step 4 pre-created N dummy answers so all slots exist.
-                    // Each slot has a server-assigned route. Overwrite text + set route
-                    // explicitly to control order.
-                    const visibleInputs = await page.evaluateHandle(() => {
-                        return Array.from(document.querySelectorAll('input.answer')).filter(el => {
-                            const tr = el.closest('tr');
-                            return tr && tr.style.display !== 'none';
-                        });
-                    });
-                    const slotCount = await visibleInputs.evaluate(arr => arr.length);
-
-                    for (let j = 0; j < processedAnswers.length; j++) {
-                        const ans = processedAnswers[j];
-                        if (j >= slotCount) {
-                            log.fail(`    슬롯 부족: ${j + 1}/${slotCount}`);
-                            answerFailures++;
-                            continue;
-                        }
-                        const slotInput = await visibleInputs.evaluateHandle((arr, idx) => arr[idx], j);
-                        await slotInput.click({ clickCount: 3 });
-                        await page.keyboard.press('Backspace');
-                        await slotInput.type(ans.answer);
-                        await slotInput.evaluate((el, routeVal) => {
-                            const tr = el.closest('tr');
-                            if (tr) {
-                                const routeInput = tr.querySelector('input.route');
-                                if (routeInput) routeInput.value = routeVal;
-                            }
-                        }, j + 1);
-                        log.verbose(`    슬롯 ${j + 1}: "${ans.answer}" route=${j + 1}`);
-                    }
-                }
 
                 await withRetry(
                     () => submitPageForm(page),
                     '페이지 저장'
                 );
 
-                // Update page meta (skip hash if any step failed, so next run retries)
-                if (pageImageFailures === 0 && answerFailures === 0) {
+                if (built.imageFailures === 0 && built.audioFailures === 0 && built.unresolvedRefs.length === 0) {
                     pageMeta.hash = pages[name].hash;
                 }
                 pageMeta.is_first = isFirst;
@@ -1579,8 +1638,7 @@ async function main() {
                 pageMeta.answers = (pageData.answers || []).map(a => a.answer);
                 writePageMeta(contentPath, name, pageMeta);
 
-                // Save final HTML with replaced image URLs for later use
-                pages[name].finalHtml = html;
+                pages[name].finalHtml = built.html;
 
                 counts.updated++;
                 log.verbose(`    수정됨`);
@@ -1648,7 +1706,9 @@ async function main() {
 
                 let connectionSuccess = true;
                 for (const src of sources) {
-                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex);
+                    // Pass answer text so setParentConnection matches the checkbox by
+                    // label first (robust to slot reordering); index is the fallback.
+                    const success = await setParentConnection(page, src.fromPageId, src.answerIndex, src.answer);
                     if (success) {
                         log.verbose(`    <- ${src.fromName} [정답: ${src.answer}]`);
                     } else {
