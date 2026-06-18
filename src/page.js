@@ -398,6 +398,81 @@ async function addAnswer(page, answer, isPublic = false, explanation = '', slotI
 }
 
 /**
+ * Sync answers in place on an existing page's edit form (approach: position-based).
+ * Does NOT delete the page. Overwrites existing slots in order, appends extra rows,
+ * and deletes surplus trailing rows. Verified on the site: each row's `route` is a
+ * stable per-row id — overwriting text keeps the route, appended rows get max+1, and
+ * deleting a row leaves the others' routes unshifted. So child connections bound to a
+ * route survive unless that exact slot is removed.
+ *
+ * @param {object} page - Puppeteer page (already on the page's edit screen)
+ * @param {Array<{answer:string, public?:boolean, explanationHtml?:string}>} answers
+ * @returns {Promise<{ok:boolean, overwritten:number, added:number, deleted:number, failures:number}>}
+ */
+async function syncAnswers(page, answers) {
+    const result = { ok: true, overwritten: 0, added: 0, deleted: 0, failures: 0 };
+
+    // Snapshot current visible answer rows.
+    const currentCount = await page.evaluate(() => {
+        return [...document.querySelectorAll('input.answer')].filter(el => {
+            const tr = el.closest('tr');
+            return tr && tr.style.display !== 'none';
+        }).length;
+    });
+
+    // 1) Overwrite existing slots (position-based) for the answers that fit.
+    const overwriteCount = Math.min(currentCount, answers.length);
+    for (let i = 0; i < overwriteCount; i++) {
+        const ans = answers[i];
+        const slot = await page.evaluateHandle((idx) => {
+            const inputs = [...document.querySelectorAll('input.answer')].filter(el => {
+                const tr = el.closest('tr');
+                return tr && tr.style.display !== 'none';
+            });
+            return inputs[idx] || null;
+        }, i);
+        const el = slot.asElement();
+        if (!el) { result.failures++; result.ok = false; continue; }
+        await el.click({ clickCount: 3 });
+        await page.keyboard.press('Backspace');
+        await el.type(ans.answer);
+        result.overwritten++;
+        log.verbose(`    슬롯 ${i + 1} 덮어씀: "${ans.answer}"`);
+    }
+
+    // 2) Append rows for any extra new answers.
+    for (let i = currentCount; i < answers.length; i++) {
+        const ans = answers[i];
+        const r = await addAnswer(page, ans.answer, ans.public || false, ans.explanationHtml || '');
+        if (r === 'filled') { result.added++; log.verbose(`    슬롯 ${i + 1} 추가: "${ans.answer}"`); }
+        else { result.failures++; result.ok = false; log.fail(`    슬롯 ${i + 1} 추가 실패: ${r}`); }
+    }
+
+    // 3) Delete surplus trailing rows (current has more than needed).
+    //    Delete from the last visible row backwards so indices stay valid.
+    for (let i = currentCount - 1; i >= answers.length; i--) {
+        const deleted = await page.evaluate((idx) => {
+            const inputs = [...document.querySelectorAll('input.answer')].filter(el => {
+                const tr = el.closest('tr');
+                return tr && tr.style.display !== 'none';
+            });
+            const target = inputs[idx];
+            if (!target) return false;
+            const tr = target.closest('tr');
+            const link = tr.querySelector('a[onclick*="deleteAnswer"]') ||
+                (tr.parentElement && tr.parentElement.querySelector('a[onclick*="deleteAnswer"]'));
+            if (link) { link.click(); return true; }
+            return false;
+        }, i);
+        if (deleted) { result.deleted++; log.verbose(`    슬롯 ${i + 1} 삭제`); }
+        else { result.failures++; result.ok = false; log.fail(`    슬롯 ${i + 1} 삭제 실패`); }
+        await new Promise(r => setTimeout(r, 100));
+    }
+
+    return result;
+}
+
+/**
  * Submit the page form (create or update)
  * @param {object} page - Puppeteer page
  * @param {string} labyrinthId - Labyrinth ID (for finding page in list after redirect)
@@ -607,15 +682,19 @@ async function setParentConnection(page, parentPageId, answerIndex = 1, answerTe
 /**
  * Clear all parent connections (from child page)
  * @param {object} page - Puppeteer page
+ * @returns {Promise<boolean>} true if at least one connection was unchecked
  */
 async function clearParentConnections(page) {
     const checkboxes = await page.$$('input[name="prevQuestCheckList"]');
+    let cleared = false;
     for (const checkbox of checkboxes) {
         const isChecked = await checkbox.evaluate(el => el.checked);
         if (isChecked) {
             await checkbox.click();
+            cleared = true;
         }
     }
+    return cleared;
 }
 
 /**
@@ -694,6 +773,7 @@ module.exports = {
     setEditorContent,
     fillPageForm,
     addAnswer,
+    syncAnswers,
     setParentConnection,
     clearParentConnections,
     getParentConnections,

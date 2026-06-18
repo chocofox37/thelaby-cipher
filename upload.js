@@ -189,6 +189,7 @@ const {
     navigateToEditPage,
     fillPageForm,
     addAnswer,
+    syncAnswers,
     submitPageForm,
     getPageList,
     setParentConnection,
@@ -1243,8 +1244,15 @@ async function main() {
         const updatedPages = [];
         const unchangedPages = [];
 
-        // Normal pages: check if content changed
-        // If answers changed, the page must be deleted and recreated
+        // Normal pages: check if content changed.
+        // Answer changes are now handled IN PLACE (no delete-recreate): the page keeps
+        // its ID, so child connections bound to per-row routes survive. syncAnswers()
+        // overwrites/appends/deletes rows without clearing every slot.
+        const answersChangedPages = new Set();
+        // Child page paths that an in-place parent STOPPED pointing to (answer dropped or
+        // re-pointed). Their stale parent link must be cleared in Step 6 even though they
+        // are no longer a connection target.
+        const droppedChildTargets = new Set();
         for (const name of states.normal) {
             const pageInfo = pages[name];
             if (pageInfo.meta.hash !== pageInfo.hash) {
@@ -1253,38 +1261,35 @@ async function main() {
                 const answersChanged = oldAnswers.length !== newAnswers.length ||
                     oldAnswers.some((a, i) => a !== newAnswers[i]);
                 if (answersChanged) {
-                    // Will be deleted and recreated
-                    updatedPages.push({ name, recreate: true });
-                } else {
-                    updatedPages.push({ name, recreate: false });
+                    answersChangedPages.add(name);
                 }
+                // Independently of text changes, compare old vs new answer targets to find
+                // children this page STOPPED pointing to (answer dropped or next re-pointed).
+                // A pure next-remap (same text) still needs the old child's link cleared.
+                const oldTargets = pageInfo.meta.answerTargets || [];
+                const newTargets = new Set((pageInfo.json.answers || []).map(a => a.next).filter(Boolean));
+                for (const t of oldTargets) {
+                    if (t && !newTargets.has(t)) droppedChildTargets.add(t);
+                }
+                updatedPages.push({ name });
             } else {
                 unchangedPages.push(name);
             }
         }
 
-        // Pages to delete before recreate (from pageIds_missing + answer-changed pages)
+        // pageIds_missing: meta has an ID the site list doesn't know — recreate.
+        // (These are genuinely gone from the site, so there's nothing to update in place.)
         const pagesToDeleteBeforeRecreate = [];
         for (const item of states.pageIds_missing) {
+            // The page is already absent from the site list; only delete if it still
+            // resolves (deletePage tolerates already-deleted), then recreate.
             pagesToDeleteBeforeRecreate.push(item.id);
             newPages.push(item.name);
             pages[item.name].meta = {};
         }
-        for (const item of updatedPages) {
-            if (item.recreate) {
-                const pageId = pages[item.name].meta.id;
-                if (pageId) {
-                    pagesToDeleteBeforeRecreate.push(pageId);
-                    newPages.push(item.name);
-                    pages[item.name].meta = {};
-                }
-            }
-        }
 
-        // Filter updatedPages to only non-recreate pages
-        const pagesToUpdateInPlace = updatedPages
-            .filter(item => !item.recreate)
-            .map(item => item.name);
+        // Every changed normal page is updated in place now (recreate path removed).
+        const pagesToUpdateInPlace = updatedPages.map(item => item.name);
 
         // Pages to delete (orphans, residual_meta with IDs)
         const pagesToDelete = [...states.orphan];
@@ -1525,6 +1530,9 @@ async function main() {
                     pages[name].meta.is_first = isFirst;
                     pages[name].meta.is_ending = isEnding;
                     pages[name].meta.answers = answers.map(a => a.answer);
+                    // Remember each answer's target so a later in-place update can detect
+                    // which child a dropped/re-pointed answer used to link to.
+                    pages[name].meta.answerTargets = answers.map(a => a.next || null);
                     const clean = built.imageFailures === 0 && built.audioFailures === 0 && answerFailures === 0;
                     if (clean && built.unresolvedRefs.length === 0) {
                         pages[name].meta.hash = pages[name].hash;
@@ -1611,9 +1619,6 @@ async function main() {
                 const isEnding = pageData.is_ending || false;
                 const hasAnswers = (pageData.answers || []).length > 0;
 
-                // Re-inject content only. Answers already exist on the page (new pages
-                // got them in Step 4; in-place pages never changed their answers), so we
-                // do not touch answer rows here.
                 await fillPageForm(page, {
                     title: pageData.title,
                     bgColor: pageData.background_color || '#000000',
@@ -1625,17 +1630,28 @@ async function main() {
                     content: built.html,
                 });
 
+                // Sync answers IN PLACE when they changed (no delete-recreate). The page
+                // keeps its ID and per-row routes, so child connections survive; Step 6
+                // re-establishes only the links whose answer→next mapping moved.
+                let answerSyncFailures = 0;
+                if (answersChangedPages.has(name)) {
+                    const sync = await syncAnswers(page, built.processedAnswers);
+                    answerSyncFailures = sync.failures;
+                    log.verbose(`    답안 동기화: 덮어씀 ${sync.overwritten}, 추가 ${sync.added}, 삭제 ${sync.deleted}, 실패 ${sync.failures}`);
+                }
+
                 await withRetry(
                     () => submitPageForm(page),
                     '페이지 저장'
                 );
 
-                if (built.imageFailures === 0 && built.audioFailures === 0 && built.unresolvedRefs.length === 0) {
+                if (built.imageFailures === 0 && built.audioFailures === 0 && built.unresolvedRefs.length === 0 && answerSyncFailures === 0) {
                     pageMeta.hash = pages[name].hash;
                 }
                 pageMeta.is_first = isFirst;
                 pageMeta.is_ending = isEnding;
                 pageMeta.answers = (pageData.answers || []).map(a => a.answer);
+                pageMeta.answerTargets = (pageData.answers || []).map(a => a.next || null);
                 writePageMeta(contentPath, name, pageMeta);
 
                 pages[name].finalHtml = built.html;
@@ -1652,11 +1668,26 @@ async function main() {
         // Step 6: Set parent connections
         // ============================================================
         // For new/recreated pages, we need to scan ALL pages' answers (not just new/updated)
-        // because existing unchanged pages might have answers pointing to new pages
+        // because existing unchanged pages might have answers pointing to new pages.
         const connections = {};
         const newPageIds = new Set(newPages.map(name => pageIdMap[name]).filter(Boolean));
 
-        // Scan all pages' answers for connections to new pages
+        // Children whose stale parent link must be revisited even though they may not be a
+        // current connection target: pages an in-place parent stopped pointing to. We add
+        // them as targets with an EMPTY-but-rebuilt source list so clearParentConnections
+        // wipes the stale link, and any still-valid parents get re-added by the scan below.
+        const droppedTargetIds = new Set(
+            [...droppedChildTargets].map(t => pageIdMap[t]).filter(Boolean)
+        );
+        for (const id of droppedTargetIds) {
+            if (!connections[id]) connections[id] = [];
+        }
+
+        // id -> name (inverse of pageIdMap), for target lookups in the scan below.
+        const idToName = Object.fromEntries(Object.entries(pageIdMap).map(([n, i]) => [i, n]));
+
+        // Scan all pages' answers. A connection is (re)processed when the target is new,
+        // the source is new/updated, OR the target is a dropped child being cleaned up.
         for (const [name, pageInfo] of Object.entries(pages)) {
             const pageData = pageInfo.json;
             const pageMeta = pageInfo.meta;
@@ -1668,11 +1699,15 @@ async function main() {
             answers.forEach((ans, idx) => {
                 if (ans.next && pageIdMap[ans.next]) {
                     const targetPageId = pageIdMap[ans.next];
-                    // Only process connections TO new pages, or FROM new/updated pages
+                    const targetName = idToName[targetPageId];
                     const isTargetNew = newPageIds.has(targetPageId);
                     const isSourceNewOrUpdated = pagesToUpdate.includes(name);
+                    const isDroppedTarget = droppedTargetIds.has(targetPageId);
+                    // A target whose hash was cleared by a previous failed connection
+                    // (now in pagesToUpdate) must be reprocessed so the retry actually runs.
+                    const isTargetUpdated = targetName && pagesToUpdate.includes(targetName);
 
-                    if (isTargetNew || isSourceNewOrUpdated) {
+                    if (isTargetNew || isSourceNewOrUpdated || isDroppedTarget || isTargetUpdated) {
                         if (!connections[targetPageId]) {
                             connections[targetPageId] = [];
                         }
@@ -1691,10 +1726,42 @@ async function main() {
         log.info('');
         log.section(6, 6, '페이지 연결');
         if (targetPages.length > 0) {
+            // A parent slot's checkbox only appears on a child if that slot is FREE
+            // (unlinked) or already linked to this child. After a reorder, a slot must
+            // move from child A to child B — but it stays bound to A until A is cleared.
+            // So clear ALL affected children first (Phase 1), freeing every slot, then
+            // set the new connections (Phase 2). This avoids intra-run ordering deadlocks.
+            const helper = Object.entries(pageIdMap);
+            const nameOf = (id) => helper.find(([n, i]) => i === id)?.[0] || id;
+
+            // Phase 1: clear parent connections on every target child.
+            for (let i = 0; i < targetPages.length; i++) {
+                const targetPageId = targetPages[i];
+                const targetName = nameOf(targetPageId);
+                log.progress(i + 1, targetPages.length, `초기화 ${targetName}`);
+                await withRetry(
+                    () => navigateToEditPage(page, labyrinthId, targetPageId),
+                    '페이지 편집 화면 이동'
+                );
+                const hadAny = await clearParentConnections(page);
+                if (hadAny) {
+                    // Re-inject HTML so the clearing save doesn't let SmartEditor corrupt content.
+                    if (pages[targetName] && !pages[targetName].finalHtml && pages[targetName].html) {
+                        const rebuilt = await buildPageContent(targetName);
+                        pages[targetName].finalHtml = rebuilt.html;
+                    }
+                    const fh = pages[targetName]?.finalHtml;
+                    if (fh) await setEditorContent(page, fh);
+                    await withRetry(() => submitPageForm(page), '페이지 저장');
+                }
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            // Phase 2: set the desired connections on every target child (slots now free).
             for (let i = 0; i < targetPages.length; i++) {
                 const targetPageId = targetPages[i];
                 const sources = connections[targetPageId];
-                const targetName = Object.entries(pageIdMap).find(([n, id]) => id === targetPageId)?.[0] || targetPageId;
+                const targetName = nameOf(targetPageId);
 
                 log.progress(i + 1, targetPages.length, targetName);
 
@@ -1702,7 +1769,6 @@ async function main() {
                     () => navigateToEditPage(page, labyrinthId, targetPageId),
                     '페이지 편집 화면 이동'
                 );
-                await clearParentConnections(page);
 
                 let connectionSuccess = true;
                 for (const src of sources) {
@@ -1718,9 +1784,11 @@ async function main() {
                     }
                 }
 
-                // Re-set HTML content to overwrite any changes made by SmartEditor
-                // (SmartEditor executes JS when the edit page is opened, which can bake
-                // inline styles from onload handlers into the HTML)
+                // Re-set HTML content to overwrite any changes made by SmartEditor.
+                if (pages[targetName] && !pages[targetName].finalHtml && pages[targetName].html) {
+                    const rebuilt = await buildPageContent(targetName);
+                    pages[targetName].finalHtml = rebuilt.html;
+                }
                 const finalHtml = pages[targetName]?.finalHtml;
                 if (finalHtml) {
                     await setEditorContent(page, finalHtml);
